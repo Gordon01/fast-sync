@@ -34,21 +34,31 @@ impl Wft {
         );
         Ok(res)
     }
+
+    pub async fn download_file(&self, path: impl AsRef<str>) -> Result<Vec<u8>> {
+        let path = path.as_ref();
+        let url = format!("http://{}/{}", self.address, path);
+        let req = reqwest::get(&url).await?;
+        let status = req.status();
+        let bytes = req.bytes().await?;
+        info!(url, path, "status: {status}, len {}", bytes.len(),);
+        Ok(bytes.to_vec())
+    }
 }
 
 #[derive(Debug, Deserialize)]
 pub struct Directory {
-    directories: Vec<Entry>,
-    files: Vec<Entry>,
+    pub(crate) directories: Vec<Entry>,
+    pub(crate) files: Vec<Entry>,
 }
 
 #[derive(Debug, Deserialize)]
 pub struct Entry {
-    name: String,
-    size: u64,
-    path: String,
-    modified: u64,
-    extension: String,
+    pub(crate) name: String,
+    pub(crate) size: u64,
+    pub(crate) path: String,
+    pub(crate) modified: u64,
+    pub(crate) extension: String,
 }
 
 type Result<T> = core::result::Result<T, Error>;
