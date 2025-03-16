@@ -51,7 +51,9 @@ impl Wft {
 
 #[derive(Debug, Deserialize)]
 pub struct Directory {
+    #[serde(default)]
     pub(crate) directories: Vec<Entry>,
+    #[serde(default)]
     pub(crate) files: Vec<Entry>,
 }
 
