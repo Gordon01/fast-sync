@@ -1,9 +1,8 @@
 use std::net::SocketAddr;
 
-use clap::builder::Str;
-use reqwest::{Method, Request};
+use readable::byte::Byte;
 use serde::Deserialize;
-use tracing::{debug, info};
+use tracing::{info, trace};
 
 /// Wi-Fi File Transfer protocol from
 /// https://play.google.com/store/apps/details?id=com.techprd.filetransfer
@@ -17,22 +16,26 @@ impl Wft {
         Self { address }
     }
 
-    pub async fn directory(&self, path: impl AsRef<str>) -> Result<Directory> {
+    pub async fn directory(&self, path: impl AsRef<str>) -> Result<(u64, Directory)> {
         let path = path.as_ref();
         let url = format!("http://{}/api/directory/root{}", self.address, path);
         let req = reqwest::get(&url).await?;
         let status = req.status();
         let req = req.text().await?;
         info!("status: {status}, len {}", req.len());
-        let res: Directory = serde_json::from_str(&req)?;
+
+        let dir: Directory = serde_json::from_str(&req)?;
+        let total_size: u64 = dir.files.iter().map(|e| e.size).sum();
+
         info!(
             url,
             path,
-            "got {} dirs, {} files",
-            res.directories.len(),
-            res.files.len()
+            "got {} dirs, {} files, total: {}",
+            dir.directories.len(),
+            dir.files.len(),
+            Byte::from(total_size)
         );
-        Ok(res)
+        Ok((total_size, dir))
     }
 
     pub async fn download_file(&self, path: impl AsRef<str>) -> Result<Vec<u8>> {
@@ -41,7 +44,7 @@ impl Wft {
         let req = reqwest::get(&url).await?;
         let status = req.status();
         let bytes = req.bytes().await?;
-        info!(url, path, "status: {status}, len {}", bytes.len(),);
+        trace!(url, path, "status: {status}, len {}", bytes.len(),);
         Ok(bytes.to_vec())
     }
 }
@@ -56,8 +59,11 @@ pub struct Directory {
 pub struct Entry {
     pub(crate) name: String,
     pub(crate) size: u64,
+    #[allow(unused)]
     pub(crate) path: String,
+    #[allow(unused)] // TODO use for resolving conflicts
     pub(crate) modified: u64,
+    #[allow(unused)] // Unsure
     pub(crate) extension: String,
 }
 
