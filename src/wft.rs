@@ -16,7 +16,7 @@ impl Wft {
         Self { address }
     }
 
-    pub async fn directory(&self, path: impl AsRef<str>) -> Result<(u64, Directory)> {
+    pub async fn directory(&self, path: impl AsRef<str>) -> Result<Directory> {
         let path = path.as_ref();
         let url = format!("http://{}/api/directory/root{}", self.address, path);
         let req = reqwest::get(&url).await?;
@@ -25,17 +25,15 @@ impl Wft {
         info!("status: {status}, len {}", req.len());
 
         let dir: Directory = serde_json::from_str(&req)?;
-        let total_size: u64 = dir.files.iter().map(|e| e.size).sum();
 
         info!(
             url,
             path,
-            "got {} dirs, {} files, total: {}",
+            "got {} dirs, {} files",
             dir.directories.len(),
-            dir.files.len(),
-            Byte::from(total_size)
+            dir.files.len()
         );
-        Ok((total_size, dir))
+        Ok(dir)
     }
 
     pub async fn download_file(&self, path: impl AsRef<str>) -> Result<Vec<u8>> {
@@ -44,7 +42,12 @@ impl Wft {
         let req = reqwest::get(&url).await?;
         let status = req.status();
         let bytes = req.bytes().await?;
-        trace!(url, path, "status: {status}, len {}", bytes.len(),);
+        trace!(
+            url,
+            path,
+            "downloaded file: status = {status}, size = {}",
+            Byte::from(bytes.len()),
+        );
         Ok(bytes.to_vec())
     }
 }

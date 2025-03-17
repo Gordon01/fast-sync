@@ -1,5 +1,4 @@
-mod api;
-mod wft_proto;
+mod wft;
 
 use std::{
     net::{IpAddr, SocketAddr},
@@ -12,7 +11,7 @@ use clap::Parser;
 use readable::byte::Byte;
 use tracing::{debug, info};
 use tracing_subscriber::EnvFilter;
-use wft_proto::Wft;
+use wft::{Directory, Wft};
 
 #[derive(Debug, Parser)]
 struct Cli {
@@ -35,29 +34,69 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     debug!("CL arguments: {cli:#?}");
     let wft = Wft::new(SocketAddr::new(cli.ip, cli.port));
-    let (size, pictures) = wft.directory(&cli.directory).await?;
+    let directory = wft.directory(&cli.directory).await?;
 
-    let mut out_dir = PathBuf::from(cli.output.unwrap_or("out".to_string()));
-    out_dir.extend(cli.directory.split("/"));
+    process_files(&cli, &directory, &wft).await
+}
+
+#[derive(Debug)]
+enum FileStatus {
+    Missing,
+    UpToDate,
+    Outdated,
+}
+
+async fn process_files(cli: &Cli, directory: &Directory, wft: &Wft) -> anyhow::Result<()> {
+    let out_dir = {
+        let mut dir = PathBuf::from(cli.output.as_deref().unwrap_or("out"));
+        dir.extend(cli.directory.split('/'));
+        dir
+    };
     std::fs::create_dir_all(&out_dir)?;
+
     let start = Instant::now();
     let mut done = 0;
-    for file in pictures.files {
-        let mut out_file = out_dir.clone();
-        out_file.push(&file.name);
-        let out_path = format!("{}/{}", cli.directory.trim_end_matches("/"), file.name);
-        let bytes = wft.download_file(&out_path).await?;
-        std::fs::write(out_file, &bytes).context("create output file")?;
+    let size: u64 = directory.files.iter().map(|e| e.size).sum();
 
-        // Statistics
-        done += bytes.len();
-        let speed = done as u64 / (start.elapsed().as_secs() + 1);
+    for file in &directory.files {
+        let out_file = out_dir.join(&file.name);
+
+        let status = file_status(&out_file, file.size, file.modified);
+        debug!("got {} with {status:?}", out_file.display());
+        match status {
+            FileStatus::UpToDate => continue,
+            FileStatus::Outdated | FileStatus::Missing => {
+                let out_path = format!("{}/{}", cli.directory.trim_end_matches('/'), file.name);
+                let bytes = wft.download_file(&out_path).await?;
+                std::fs::write(&out_file, &bytes)
+                    .with_context(|| format!("Failed to write output file {:?}", out_file))?;
+                done += bytes.len();
+            }
+        }
+
+        let elapsed_secs = start.elapsed().as_secs() + 1; // Avoid division by zero
+        let speed = done as u64 / elapsed_secs;
         info!(
-            "Bytes left: {}, {}/s, done: {out_path}",
+            "Bytes left: {}, {}/s, done: {}",
             Byte::from(size - done as u64),
-            Byte::from(speed)
+            Byte::from(speed),
+            out_file.display()
         );
     }
 
     Ok(())
+}
+
+fn file_status(out_file: &PathBuf, remote_size: u64, _remote_mtime: u64) -> FileStatus {
+    match std::fs::metadata(out_file) {
+        Ok(metadata) => {
+            let local_size = metadata.len();
+            if local_size == remote_size {
+                FileStatus::UpToDate
+            } else {
+                FileStatus::Outdated
+            }
+        }
+        Err(_) => FileStatus::Missing,
+    }
 }
