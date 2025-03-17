@@ -1,14 +1,15 @@
+mod stats;
 mod wft;
 
 use std::{
     net::{IpAddr, SocketAddr},
     path::PathBuf,
-    time::Instant,
 };
 
 use anyhow::Context;
 use clap::Parser;
-use readable::byte::Byte;
+use readable::{byte::Byte, up::Uptime};
+use stats::TransferStats;
 use tracing::{debug, info};
 use tracing_subscriber::EnvFilter;
 use wft::{Directory, Wft};
@@ -54,33 +55,41 @@ async fn process_files(cli: &Cli, directory: &Directory, wft: &Wft) -> anyhow::R
     };
     std::fs::create_dir_all(&out_dir)?;
 
-    let start = Instant::now();
-    let mut done = 0;
-    let size: u64 = directory.files.iter().map(|e| e.size).sum();
+    let total_bytes: u64 = directory.files.iter().map(|e| e.size).sum();
+    let mut stats = TransferStats::new(total_bytes);
 
     for file in &directory.files {
         let out_file = out_dir.join(&file.name);
-
         let status = file_status(&out_file, file.size, file.modified);
-        debug!("got {} with {status:?}", out_file.display());
-        match status {
-            FileStatus::UpToDate => continue,
-            FileStatus::Outdated | FileStatus::Missing => {
-                let out_path = format!("{}/{}", cli.directory.trim_end_matches('/'), file.name);
-                let bytes = wft.download_file(&out_path).await?;
-                std::fs::write(&out_file, &bytes)
-                    .with_context(|| format!("Failed to write output file {:?}", out_file))?;
-                done += bytes.len();
-            }
+
+        debug!(
+            "Checking {}: status = {status:?}, size = {}, ETA = {}",
+            out_file.display(),
+            Byte::from(file.size),
+            Uptime::from(file.size / stats.speed().max(1))
+        );
+        if let FileStatus::UpToDate = status {
+            continue;
         }
 
-        let elapsed_secs = start.elapsed().as_secs() + 1; // Avoid division by zero
-        let speed = done as u64 / elapsed_secs;
+        let out_path = format!("{}/{}", cli.directory.trim_end_matches('/'), file.name);
+        let (bytes, download_time) = wft.download_file(&out_path).await?;
+        std::fs::write(&out_file, &bytes)
+            .with_context(|| format!("Failed to write output file {:?}", out_file))?;
+        stats.update(bytes.len() as u64);
+
         info!(
-            "Bytes left: {}, {}/s, done: {}",
-            Byte::from(size - done as u64),
-            Byte::from(speed),
-            out_file.display()
+            "Bytes left: {}, {}/s, {:.2}% ETA: {}, done: {} in {}",
+            Byte::from(stats.left()),
+            Byte::from(stats.speed()),
+            stats.progress() * 100.0,
+            if let Some(eta) = stats.eta() {
+                Uptime::from(eta).to_string()
+            } else {
+                "∞".to_string()
+            },
+            out_file.display(),
+            Uptime::from(download_time)
         );
     }
 

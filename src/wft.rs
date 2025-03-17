@@ -1,4 +1,7 @@
-use std::net::SocketAddr;
+use std::{
+    net::SocketAddr,
+    time::{Duration, Instant},
+};
 
 use readable::byte::Byte;
 use serde::Deserialize;
@@ -36,7 +39,8 @@ impl Wft {
         Ok(dir)
     }
 
-    pub async fn download_file(&self, path: impl AsRef<str>) -> Result<Vec<u8>> {
+    pub async fn download_file(&self, path: impl AsRef<str>) -> Result<(Vec<u8>, Duration)> {
+        let start = Instant::now();
         let path = path.as_ref();
         let url = format!("http://{}/{}", self.address, path);
         let req = reqwest::get(&url).await?;
@@ -48,7 +52,7 @@ impl Wft {
             "downloaded file: status = {status}, size = {}",
             Byte::from(bytes.len()),
         );
-        Ok(bytes.to_vec())
+        Ok((bytes.to_vec(), start.elapsed()))
     }
 }
 
