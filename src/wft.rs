@@ -25,16 +25,20 @@ impl Wft {
         let req = reqwest::get(&url).await?;
         let status = req.status();
         let req = req.text().await?;
-        info!("status: {status}, len {}", req.len());
+        let content_len = req.len();
+
+        if let Ok(e) = serde_json::from_str::<ErrorResponse>(&req) {
+            return Err(Error::NotFound(e.error));
+        }
 
         let dir: Directory = serde_json::from_str(&req)?;
-
         info!(
             url,
             path,
-            "got {} dirs, {} files",
+            "got {} dirs, {} files, total {} ({status})",
             dir.directories.len(),
-            dir.files.len()
+            dir.files.len(),
+            Byte::from(content_len)
         );
         Ok(dir)
     }
@@ -76,10 +80,17 @@ pub struct Entry {
     pub(crate) extension: String,
 }
 
+#[derive(Debug, Deserialize)]
+pub struct ErrorResponse {
+    error: String,
+}
+
 type Result<T> = core::result::Result<T, Error>;
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
+    #[error("not found: {0}")]
+    NotFound(String),
     #[error("network failure: {0}")]
     NetworkFailure(#[from] reqwest::Error),
     #[error("unexpected data format: {0}")]
