@@ -5,7 +5,7 @@
     let
       fast-sync = pkgs.rustPlatform.buildRustPackage {
         pname = "fast-sync";
-        version = "0.0.1";
+        version = (fromTOML (builtins.readFile ../Cargo.toml)).package.version;
         src = ../.;
         cargoLock.lockFile = ../Cargo.lock;
 

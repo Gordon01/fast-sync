@@ -14,16 +14,25 @@ use tracing::{debug, info};
 use tracing_subscriber::EnvFilter;
 use wft::{Directory, Wft};
 
+/// Sync files from WiFi File Transfer to local disk.
 #[derive(Debug, Parser)]
+#[command(version)]
 struct Cli {
+    /// WiFi File Transfer server IP.
     #[arg(long, short)]
     ip: IpAddr,
+
+    /// WiFi File Transfer port.
     #[arg(long, short, default_value_t = 1234)]
     port: u16,
+
+    /// Remote directory to sync.
     #[arg(long, short, default_value = "/DCIM/Camera")]
     directory: String,
-    #[arg(long, short)]
-    output: Option<String>,
+
+    /// Local output root.
+    #[arg(long, short, default_value = "out")]
+    output: PathBuf,
 }
 
 #[tokio::main]
@@ -49,7 +58,7 @@ enum FileStatus {
 
 async fn process_files(cli: &Cli, directory: &Directory, wft: &Wft) -> anyhow::Result<()> {
     let out_dir = {
-        let mut dir = PathBuf::from(cli.output.as_deref().unwrap_or("out"));
+        let mut dir = cli.output.clone();
         dir.extend(cli.directory.split('/'));
         dir
     };
