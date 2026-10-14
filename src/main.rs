@@ -14,15 +14,15 @@ use tracing::{debug, info};
 use tracing_subscriber::EnvFilter;
 use wft::{Directory, Wft};
 
-/// Sync files from WiFi File Transfer to local disk.
+/// Syncs files from a Wi‑Fi File Transfer server to the local filesystem.
 #[derive(Debug, Parser)]
 #[command(version)]
 struct Cli {
-    /// WiFi File Transfer server IP.
+    /// Server IP address.
     #[arg(long, short)]
     ip: IpAddr,
 
-    /// WiFi File Transfer port.
+    /// Server port.
     #[arg(long, short, default_value_t = 1234)]
     port: u16,
 
@@ -30,7 +30,7 @@ struct Cli {
     #[arg(long, short, default_value = "/DCIM/Camera")]
     directory: String,
 
-    /// Local output root.
+    /// Local output directory.
     #[arg(long, short, default_value = "out")]
     output: PathBuf,
 }
@@ -56,6 +56,7 @@ enum FileStatus {
     Outdated,
 }
 
+/// Downloads files that are missing or newer/changed on the remote endpoint.
 async fn process_files(cli: &Cli, directory: &Directory, wft: &Wft) -> anyhow::Result<()> {
     let out_dir = {
         let mut dir = cli.output.clone();
@@ -105,6 +106,7 @@ async fn process_files(cli: &Cli, directory: &Directory, wft: &Wft) -> anyhow::R
     Ok(())
 }
 
+/// Compares the local file with the remote listing to decide whether it should be synced.
 fn file_status(out_file: &PathBuf, remote_size: u64, _remote_mtime: u64) -> FileStatus {
     match std::fs::metadata(out_file) {
         Ok(metadata) => {

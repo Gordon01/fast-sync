@@ -7,18 +7,30 @@ use readable::byte::Byte;
 use serde::Deserialize;
 use tracing::{info, trace};
 
-/// Wi-Fi File Transfer protocol from
-/// https://play.google.com/store/apps/details?id=com.techprd.filetransfer
+/// Wi‑Fi File Transfer client for the device HTTP API.
+///
+/// This client talks to a single host at `http://<address>/...` and exposes the small subset of
+/// operations used here: listing a directory and downloading a file.
 pub struct Wft {
     address: SocketAddr,
     //client: reqwest::
 }
 
 impl Wft {
+    /// Creates a client bound to a specific Wi‑Fi File Transfer device address.
     pub fn new(address: SocketAddr) -> Self {
         Self { address }
     }
 
+    /// Lists a directory on the device.
+    ///
+    /// `path` is appended to the server's directory endpoint, so values like `"/"` or
+    /// `"/Pictures"` are typical.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a failed request, a not-found response, or a payload that does not
+    /// match [`Directory`].
     pub async fn directory(&self, path: impl AsRef<str>) -> Result<Directory> {
         let path = path.as_ref();
         let url = format!("http://{}/api/directory/root{}", self.address, path);
@@ -43,6 +55,13 @@ impl Wft {
         Ok(dir)
     }
 
+    /// Downloads a file from the device.
+    ///
+    /// The returned tuple contains the file bytes and the elapsed request time.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the request or body read fails.
     pub async fn download_file(&self, path: impl AsRef<str>) -> Result<(Vec<u8>, Duration)> {
         let start = Instant::now();
         let path = path.as_ref();
@@ -60,6 +79,7 @@ impl Wft {
     }
 }
 
+/// Directory listing from the device API.
 #[derive(Debug, Deserialize)]
 pub struct Directory {
     #[serde(default)]
@@ -68,6 +88,7 @@ pub struct Directory {
     pub(crate) files: Vec<Entry>,
 }
 
+/// One entry in a directory listing.
 #[derive(Debug, Deserialize)]
 pub struct Entry {
     pub(crate) name: String,
@@ -80,12 +101,13 @@ pub struct Entry {
     pub(crate) extension: String,
 }
 
+/// Error payload returned by the device.
 #[derive(Debug, Deserialize)]
 pub struct ErrorResponse {
     error: String,
 }
 
-type Result<T> = core::result::Result<T, Error>;
+pub type Result<T> = core::result::Result<T, Error>;
 
 #[derive(thiserror::Error, Debug)]
 pub enum Error {

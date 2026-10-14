@@ -1,6 +1,6 @@
 use std::time::Instant;
 
-// Accumulates overall transfer statistics.
+/// Tracks overall transfer progress.
 pub struct TransferStats {
     pub total_bytes: u64,
     pub downloaded: u64,
@@ -8,6 +8,7 @@ pub struct TransferStats {
 }
 
 impl TransferStats {
+    /// Creates a tracker for a total byte count.
     pub fn new(total_bytes: u64) -> Self {
         Self {
             total_bytes,
@@ -16,21 +17,23 @@ impl TransferStats {
         }
     }
 
+    /// Adds downloaded bytes to the running total.
     pub fn update(&mut self, bytes: u64) {
         self.downloaded += bytes;
     }
 
-    /// Returns overall speed in bytes per second.
+    /// Returns overall throughput in bytes per second.
     pub fn speed(&self) -> u64 {
         let secs = self.start.elapsed().as_secs().max(1);
         self.downloaded / secs
     }
 
+    /// Returns the remaining bytes to download.
     pub fn left(&self) -> u64 {
         self.total_bytes - self.downloaded
     }
 
-    /// Estimated seconds remaining for overall transfer.
+    /// Estimates the remaining time in seconds, if the speed is known.
     pub fn eta(&self) -> Option<u64> {
         let speed = self.speed();
         if speed > 0 {
@@ -41,7 +44,7 @@ impl TransferStats {
         }
     }
 
-    /// Returns the progress as a fraction between 0.0 and 1.0.
+    /// Returns the completion fraction in the range `0.0..=1.0`.
     pub fn progress(&self) -> f64 {
         self.downloaded as f64 / self.total_bytes as f64
     }
