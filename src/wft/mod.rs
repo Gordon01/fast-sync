@@ -83,7 +83,7 @@ impl Wft {
     ///
     /// Returns an error if the request fails or the response is an API,
     /// HTTP, or JSON error.
-    pub async fn get_storage_details(&self) -> Result<Vec<StorageSummary>> {
+    pub async fn get_storage_details(&self) -> Result<Vec<Storage>> {
         self.get_json(self.url(&["api", "get-storage-details"])?)
             .await
     }
@@ -227,7 +227,7 @@ pub struct AndroidVersion {
 
 /// One storage location returned by `/api/get-storage-details`.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-pub struct StorageSummary {
+pub struct Storage {
     /// Path of the storage entry.
     pub path: String,
     /// Size in bytes of this storage entry.
@@ -245,7 +245,7 @@ pub struct StorageSummary {
     pub available_bytes: u64,
 }
 
-impl fmt::Display for StorageSummary {
+impl fmt::Display for Storage {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{}: {}", self.name, Byte::from(self.size))
     }
