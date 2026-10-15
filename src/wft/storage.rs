@@ -7,7 +7,7 @@ use super::{Error, Result};
 
 /// One storage location returned by `/api/get-storage-details`.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-pub struct Storage {
+pub struct ContentGroup {
     /// Path of the storage entry.
     pub path: String,
     /// Size in bytes of this storage entry.
@@ -25,88 +25,115 @@ pub struct Storage {
     pub available_bytes: u64,
 }
 
-impl fmt::Display for Storage {
+impl fmt::Display for ContentGroup {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(formatter, "{}: {}", self.name, Byte::from(self.size))
     }
 }
 
-/// Storage entries reported by WFT, with one root selected.
+/// A storage root reported by WFT.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct StorageRoot {
+    /// Absolute path of the storage root.
+    pub root_path: String,
+    /// Total capacity in bytes of the storage root.
+    pub total_bytes: u64,
+    /// Available capacity in bytes of the storage root.
+    pub available_bytes: u64,
+    contents: Vec<ContentGroup>,
+}
+
+/// Storage roots reported by WFT, with one root selected and entry sizes cached.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Storages {
-    entries: Vec<Storage>,
+    roots: Vec<StorageRoot>,
     selected: usize,
 }
 
 impl Storages {
-    pub(super) fn new(entries: Vec<Storage>) -> Result<Self> {
-        let selected = entries
+    pub(super) fn new(entries: Vec<ContentGroup>) -> Result<Self> {
+        let mut roots: Vec<StorageRoot> = Vec::new();
+
+        for content in entries {
+            let root_index = roots
+                .iter()
+                .position(|root| root.root_path == content.root_path)
+                .unwrap_or_else(|| {
+                    roots.push(StorageRoot {
+                        root_path: content.root_path.clone(),
+                        total_bytes: content.total_bytes,
+                        available_bytes: content.available_bytes,
+                        contents: Vec::new(),
+                    });
+                    roots.len() - 1
+                });
+            roots[root_index].contents.push(content);
+        }
+
+        let selected = roots
             .iter()
             .enumerate()
-            .max_by_key(|(_, storage)| storage.total_bytes)
+            .max_by_key(|(_, root)| root.total_bytes)
             .map(|(index, _)| index)
             .ok_or(Error::NoStorages)?;
-        Ok(Self { entries, selected })
+        Ok(Self { roots, selected })
     }
 
     pub fn select(&mut self, root_path: impl AsRef<str>) -> Result<()> {
         let root_path = root_path.as_ref();
         let selected = self
-            .entries
+            .roots
             .iter()
-            .position(|storage| storage.root_path == root_path)
+            .position(|root| root.root_path == root_path)
             .ok_or_else(|| Error::StorageNotFound(root_path.to_owned()))?;
         self.selected = selected;
         Ok(())
     }
 
+    /// Returns all reported storage roots.
+    pub fn roots(&self) -> &[StorageRoot] {
+        &self.roots
+    }
+
+    /// Returns the selected storage root.
+    pub fn selected_root(&self) -> &StorageRoot {
+        &self.roots[self.selected]
+    }
+
     /// Returns the selected storage root path.
     pub fn root_path(&self) -> &str {
-        &self.entries[self.selected].root_path
+        &self.selected_root().root_path
     }
 
     /// Returns the selected storage's total capacity in bytes.
     pub fn total_bytes(&self) -> u64 {
-        self.entries[self.selected].total_bytes
+        self.selected_root().total_bytes
     }
 
     /// Returns the selected storage's available capacity in bytes.
     pub fn available_bytes(&self) -> u64 {
-        self.entries[self.selected].available_bytes
-    }
-
-    /// Returns all entries reported for available storage locations.
-    pub fn entries(&self) -> &[Storage] {
-        &self.entries
+        self.selected_root().available_bytes
     }
 }
 
 impl fmt::Display for Storages {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut roots: Vec<(&str, Vec<&Storage>)> = Vec::new();
-        for storage in &self.entries {
-            if let Some((_, entries)) = roots
-                .iter_mut()
-                .find(|(root_path, _)| *root_path == storage.root_path)
-            {
-                entries.push(storage);
-            } else {
-                roots.push((&storage.root_path, vec![storage]));
-            }
-        }
-
-        for (root_path, entries) in roots {
-            let total_bytes = entries[0].total_bytes;
-            let available_bytes = entries[0].available_bytes;
+        for root in &self.roots {
             writeln!(
                 formatter,
-                "{root_path}: {} used of {} ({} free)",
-                Byte::from(total_bytes.saturating_sub(available_bytes)),
-                Byte::from(total_bytes),
-                Byte::from(available_bytes)
+                "{}: {} used of {} ({} free)",
+                root.root_path,
+                Byte::from(root.total_bytes.saturating_sub(root.available_bytes)),
+                Byte::from(root.total_bytes),
+                Byte::from(root.available_bytes)
             )?;
-            for storage in entries {
-                writeln!(formatter, "  {storage}")?;
+            for content in &root.contents {
+                writeln!(
+                    formatter,
+                    "  {}: {}",
+                    content.name,
+                    Byte::from(content.size)
+                )?;
             }
         }
         Ok(())

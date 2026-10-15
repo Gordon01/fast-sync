@@ -4,7 +4,7 @@ use std::{
 };
 
 mod storage;
-pub use storage::{Storage, Storages};
+pub use storage::{ContentGroup, StorageRoot, Storages};
 
 use readable::byte::Byte;
 use reqwest::{StatusCode, Url};

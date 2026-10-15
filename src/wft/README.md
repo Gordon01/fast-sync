@@ -57,8 +57,9 @@ time.
 
 `Wft::new` takes a `SocketAddr`, pings `/api/ping`, and fetches storage details for
 `wft.storages()`. Its default selected root is the one with the greatest total capacity; call
-`wft.storages().select(root_path)` to get a copy with another reported root selected. Construction
-returns an error if the server is unreachable, does not reply with `pong`, or reports no storage
-entries; specify the server port explicitly if it is not `1234`. Methods return `wft::Result<T>`
-and report network errors, HTTP failures, API error payloads, invalid paths, and malformed JSON
-through `wft::Error`.
+`wft.storages().select(root_path)` to select another reported root. `roots()` returns the unique
+storage roots, and `directory_sizes()` returns the API-reported sizes keyed by entry path.
+Construction returns an error if the server is unreachable, does not reply with `pong`, or reports
+no storage entries; specify the server port explicitly if it is not `1234`. Methods return
+`wft::Result<T>` and report network errors, HTTP failures, API error payloads, invalid paths, and
+malformed JSON through `wft::Error`.
