@@ -9,7 +9,6 @@ mod storage;
 pub use directory::{Directory, DirectoryEntry, DirectoryIterator, Entry, FileStatus};
 pub use storage::{ContentGroup, StorageRoot, Storages};
 
-use directory::directory_path;
 use readable::byte::Byte;
 use reqwest::{StatusCode, Url};
 use serde::{Deserialize, de::DeserializeOwned};
@@ -135,6 +134,30 @@ impl Wft {
     /// Also returns an error if the request fails or the response contains an
     /// API, HTTP, or JSON error.
     pub async fn directory(&self, path: impl AsRef<str>) -> Result<DirectoryIterator> {
+        fn directory_path(root: &str, path: &str) -> Result<String> {
+            if path.starts_with('/') {
+                return Err(Error::InvalidPath(path.to_owned()));
+            }
+            if !path.is_empty()
+                && path.split('/').any(|component| {
+                    component.is_empty()
+                        || matches!(component, "." | "..")
+                        || component.contains('\\')
+                })
+            {
+                return Err(Error::InvalidPath(path.to_owned()));
+            }
+            let root = root.trim_end_matches('/');
+            if path.is_empty() {
+                return Ok(if root.is_empty() {
+                    "/".to_owned()
+                } else {
+                    root.to_owned()
+                });
+            }
+            Ok(format!("{root}/{path}"))
+        }
+
         let relative_path = path.as_ref();
         let path = directory_path(&self.storages.selected_root().root_path, relative_path)?;
         let path = path.strip_prefix('/').expect("storage root is absolute");
@@ -154,11 +177,9 @@ impl Wft {
             directory.files.len(),
         );
         let local_directory = self.output_path.join(relative_path);
-        std::fs::create_dir_all(&local_directory).map_err(|source| {
-            Error::OutputDirectory {
-                path: local_directory.clone(),
-                source,
-            }
+        std::fs::create_dir_all(&local_directory).map_err(|source| Error::OutputDirectory {
+            path: local_directory.clone(),
+            source,
         })?;
         Ok(directory.iter(local_directory))
     }

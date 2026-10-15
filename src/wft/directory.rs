@@ -5,8 +5,6 @@ use std::{
 
 use serde::Deserialize;
 
-use super::{Error, Result};
-
 /// Directory listing returned by the WFT API.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub struct Directory {
@@ -115,28 +113,6 @@ pub struct Entry {
     pub modified: u64,
     /// File extension, or an empty string when none is reported.
     pub extension: String,
-}
-
-pub(super) fn directory_path(root: &str, path: &str) -> Result<String> {
-    if path.starts_with('/') {
-        return Err(Error::InvalidPath(path.to_owned()));
-    }
-    if !path.is_empty()
-        && path.split('/').any(|component| {
-            component.is_empty() || matches!(component, "." | "..") || component.contains('\\')
-        })
-    {
-        return Err(Error::InvalidPath(path.to_owned()));
-    }
-    let root = root.trim_end_matches('/');
-    if path.is_empty() {
-        return Ok(if root.is_empty() {
-            "/".to_owned()
-        } else {
-            root.to_owned()
-        });
-    }
-    Ok(format!("{root}/{path}"))
 }
 
 impl Entry {

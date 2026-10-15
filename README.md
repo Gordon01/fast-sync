@@ -15,7 +15,7 @@ the requested remote directory, the program:
    - Missing locally: download it.
    - Same size and modification time: leave it unchanged.
    - Different size or modification time: download it and overwrite the local file.
-4. Reports transfer progress and timing in the log.
+4. Displays byte-based transfer progress in a progress bar and reports per-file timing in the log.
 
 The server's `modified` value is interpreted as Unix-epoch milliseconds and preserved on downloaded
 files so later runs can compare timestamps exactly. The WFT protocol does not specify the units or
