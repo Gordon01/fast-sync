@@ -1,4 +1,3 @@
-mod stats;
 mod sync;
 
 use std::net::{IpAddr, SocketAddr};
