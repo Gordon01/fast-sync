@@ -1,12 +1,15 @@
 use std::{
     net::SocketAddr,
-    path::{Path, PathBuf},
-    time::{Duration, Instant, UNIX_EPOCH},
+    path::PathBuf,
+    time::{Duration, Instant},
 };
 
+mod directory;
 mod storage;
+pub use directory::{Directory, DirectoryEntry, DirectoryIterator, Entry, FileStatus};
 pub use storage::{ContentGroup, StorageRoot, Storages};
 
+use directory::directory_path;
 use readable::byte::Byte;
 use reqwest::{StatusCode, Url};
 use serde::{Deserialize, de::DeserializeOwned};
@@ -264,160 +267,6 @@ pub struct AndroidVersion {
     /// Android release identifier.
     #[serde(rename = "RELEASE")]
     pub release: String,
-}
-
-/// Directory listing returned by the WFT API.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-pub struct Directory {
-    /// Directories in the listing.
-    #[serde(default)]
-    pub directories: Vec<Entry>,
-    /// Files in the listing.
-    #[serde(default)]
-    pub files: Vec<Entry>,
-}
-
-impl Directory {
-    /// Consumes this listing and iterates its entries using `local_directory`
-    /// to determine the status of each local file.
-    ///
-    /// Directories are yielded before files.
-    pub fn iter(self, local_directory: impl Into<PathBuf>) -> DirectoryIterator {
-        DirectoryIterator {
-            directory: self,
-            local_directory: local_directory.into(),
-            next_directory: 0,
-            next_file: 0,
-        }
-    }
-}
-
-/// Iterator over the entries in a directory listing.
-pub struct DirectoryIterator {
-    directory: Directory,
-    local_directory: PathBuf,
-    next_directory: usize,
-    next_file: usize,
-}
-
-impl Iterator for DirectoryIterator {
-    type Item = DirectoryEntry;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        if let Some(directory) = self.directory.directories.get(self.next_directory) {
-            self.next_directory += 1;
-            return Some(DirectoryEntry::Directory(directory.clone()));
-        }
-
-        let file = self.directory.files.get(self.next_file)?;
-        self.next_file += 1;
-        let local_path = self.local_directory.join(&file.name);
-        let status = file.compare_local_file(&local_path);
-        Some(DirectoryEntry::File(file.clone(), local_path, status))
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        let remaining = self.directory.directories.len() - self.next_directory
-            + self.directory.files.len()
-            - self.next_file;
-        (remaining, Some(remaining))
-    }
-}
-
-impl ExactSizeIterator for DirectoryIterator {}
-
-/// A file or directory returned by [`DirectoryIterator`].
-#[derive(Debug)]
-pub enum DirectoryEntry {
-    /// A child directory.
-    Directory(Entry),
-    /// A file contained in the listed directory.
-    File(Entry, PathBuf, FileStatus),
-}
-
-/// A file or directory in a listing.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-pub struct Entry {
-    /// Entry name.
-    pub name: String,
-    /// Entry size in bytes.
-    pub size: u64,
-    /// Absolute server path of the entry.
-    pub path: String,
-    /// Modification timestamp reported by the server.
-    pub modified: u64,
-    /// File extension, or an empty string when none is reported.
-    pub extension: String,
-}
-
-fn directory_path(root: &str, path: &str) -> Result<String> {
-    if path.starts_with('/') {
-        return Err(Error::InvalidPath(path.to_owned()));
-    }
-    if !path.is_empty()
-        && path.split('/').any(|component| {
-            component.is_empty() || matches!(component, "." | "..") || component.contains('\\')
-        })
-    {
-        return Err(Error::InvalidPath(path.to_owned()));
-    }
-    let root = root.trim_end_matches('/');
-    let root = if root.is_empty() { "/" } else { root };
-    Ok(if path.is_empty() {
-        root.to_owned()
-    } else if root == "/" {
-        format!("{root}{path}")
-    } else {
-        format!("{root}/{path}")
-    })
-}
-
-impl Entry {
-    /// Compares this remote entry with a local file.
-    ///
-    /// `DifferentTimestamp` is returned when the local file exists but its size
-    /// or modification time differs from this entry.
-    pub fn compare_local_file(&self, local_path: impl AsRef<Path>) -> FileStatus {
-        let metadata = match std::fs::metadata(local_path) {
-            Ok(metadata) => metadata,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return FileStatus::Missing;
-            }
-            Err(error) => return FileStatus::MetadataError(error),
-        };
-        if metadata.len() != self.size {
-            return FileStatus::DifferentTimestamp;
-        }
-
-        let modified = match metadata.modified() {
-            Ok(modified) => modified,
-            Err(error) => return FileStatus::ModifiedTimeError(error),
-        };
-        if modified
-            .duration_since(UNIX_EPOCH)
-            .ok()
-            .is_some_and(|duration| duration.as_millis() == u128::from(self.modified))
-        {
-            FileStatus::UpToDate
-        } else {
-            FileStatus::DifferentTimestamp
-        }
-    }
-}
-
-/// Whether a local file matches a remote directory entry.
-#[derive(Debug)]
-pub enum FileStatus {
-    /// The local file exists and matches the remote size and modification time.
-    UpToDate,
-    /// No local file exists at the requested path.
-    Missing,
-    /// The local file exists but differs in size or modification time.
-    DifferentTimestamp,
-    /// Reading the local file metadata failed.
-    MetadataError(std::io::Error),
-    /// Reading the local file modification time failed.
-    ModifiedTimeError(std::io::Error),
 }
 
 /// Bytes downloaded from WFT and the elapsed request time.

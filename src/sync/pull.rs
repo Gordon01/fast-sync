@@ -27,28 +27,13 @@ pub struct PullArgs {
 /// Downloads files that are missing or differ in size or modification time.
 pub async fn pull(wft: &Wft, directory: String) -> anyhow::Result<()> {
     let entries = wft.directory(&directory).await?;
-    let mut files = Vec::new();
+    let total_bytes = entries.total_bytes() - entries.up_to_date_bytes();
+    let mut stats = TransferStats::new(total_bytes);
+
     for entry in entries {
         let DirectoryEntry::File(file, out_file, status) = entry else {
             continue;
         };
-        let status = match status {
-            FileStatus::MetadataError(error) | FileStatus::ModifiedTimeError(error) => {
-                return Err(error).with_context(|| format!("Failed to inspect {:?}", out_file));
-            }
-            status => status,
-        };
-        files.push((file, out_file, status));
-    }
-
-    let total_bytes: u64 = files
-        .iter()
-        .filter(|(_, _, status)| !matches!(status, FileStatus::UpToDate))
-        .map(|(file, _, _)| file.size)
-        .sum();
-    let mut stats = TransferStats::new(total_bytes);
-
-    for (file, out_file, status) in files {
         debug!(
             "Checking {}: status = {status:?}, size = {}, ETA = {}",
             out_file.display(),

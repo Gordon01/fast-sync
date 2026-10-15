@@ -34,6 +34,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     wft.set_output_path("out");
     let entries = wft.directory("DCIM").await?;
+    println!(
+        "{} bytes total, {} bytes already up to date",
+        entries.total_bytes(),
+        entries.up_to_date_bytes()
+    );
     for entry in entries {
         match entry {
             fast_sync::wft::DirectoryEntry::Directory(directory) => {
@@ -56,8 +61,9 @@ root with `Wft::set_output_path` (default `"out"`); `Wft::directory` returns an 
 It yields
 `DirectoryEntry::Directory` values first, followed by `DirectoryEntry::File` values; each file
 includes its local path and `FileStatus`. `Wft::directory` creates the corresponding local output
-directory. The WFT API route appends the selected root and relative path after `/api/directory/`,
-without inserting a `root` component.
+directory. The iterator's `total_bytes()` and `up_to_date_bytes()` report the total listed file size
+and the size already up to date when the iterator was created. The WFT API route appends the
+selected root and relative path after `/api/directory/`, without inserting a `root` component.
 
 `download_file` returns a `DownloadedFile` containing the downloaded `bytes` and request `elapsed`
 time.
