@@ -40,8 +40,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let directory_path = format!("{}/DCIM", storage.root_path.trim_end_matches('/'));
     let directory = wft.directory(&directory_path).await?;
     for file in directory.files {
-        let (bytes, elapsed) = wft.download_file(&file.path).await?;
-        println!("Downloaded {} bytes from {} in {elapsed:?}", bytes.len(), file.path);
+        let download = wft.download_file(&file.path).await?;
+        println!(
+            "Downloaded {} bytes from {} in {:?}",
+            download.bytes.len(),
+            file.path,
+            download.elapsed
+        );
     }
 
     Ok(())
@@ -51,6 +56,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 The program selects the storage root with the greatest `total_bytes`. For a directory listing,
 pass an absolute Android storage path. The WFT API route is formed by appending that path after
 `/api/directory/`, without inserting a `root` component.
+
+`download_file` returns a `DownloadedFile` containing the downloaded `bytes` and request `elapsed`
+time.
 
 `Wft::new` takes a `SocketAddr`, pings `/api/ping`, and returns an error if the server is
 unreachable or does not reply with `pong`; specify the server port explicitly if it is not `1234`.

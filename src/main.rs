@@ -58,7 +58,7 @@ async fn main() -> anyhow::Result<()> {
     let wft = Wft::new(SocketAddr::new(cli.ip, cli.port)).await?;
     if matches!(cli.command, Some(Command::StorageInfo)) {
         let storages = wft.get_storage_details().await?;
-        StorageSummary::print_storage_info(&storages);
+        print_storage_info(&storages);
         return Ok(());
     }
 
@@ -106,6 +106,39 @@ async fn main() -> anyhow::Result<()> {
     process_files(&cli, &remote_directory, &directory, &wft).await
 }
 
+fn print_storage_info(storages: &[StorageSummary]) {
+    if storages.is_empty() {
+        println!("No storage information returned.");
+        return;
+    }
+
+    let mut roots: Vec<(&str, Vec<&StorageSummary>)> = Vec::new();
+    for storage in storages {
+        if let Some((_, entries)) = roots
+            .iter_mut()
+            .find(|(root_path, _)| *root_path == storage.root_path)
+        {
+            entries.push(storage);
+        } else {
+            roots.push((&storage.root_path, vec![storage]));
+        }
+    }
+
+    for (root_path, entries) in roots {
+        let total_bytes = entries[0].total_bytes;
+        let available_bytes = entries[0].available_bytes;
+        println!(
+            "{root_path}: {} used of {} ({} free)",
+            Byte::from(total_bytes.saturating_sub(available_bytes)),
+            Byte::from(total_bytes),
+            Byte::from(available_bytes)
+        );
+        for storage in entries {
+            println!("  {storage}");
+        }
+    }
+}
+
 #[derive(Debug)]
 enum FileStatus {
     Missing,
@@ -145,10 +178,10 @@ async fn process_files(
         }
 
         let out_path = format!("{}/{}", remote_directory.trim_end_matches('/'), file.name);
-        let (bytes, download_time) = wft.download_file(&out_path).await?;
-        std::fs::write(&out_file, &bytes)
+        let download = wft.download_file(&out_path).await?;
+        std::fs::write(&out_file, &download.bytes)
             .with_context(|| format!("Failed to write output file {:?}", out_file))?;
-        stats.update(bytes.len() as u64);
+        stats.update(download.bytes.len() as u64);
 
         info!(
             "Bytes left: {}, {}/s, {:.2}% ETA: {}, done: {} in {}",
@@ -161,7 +194,7 @@ async fn process_files(
                 "∞".to_string()
             },
             out_file.display(),
-            Uptime::from(download_time)
+            Uptime::from(download.elapsed)
         );
     }
 

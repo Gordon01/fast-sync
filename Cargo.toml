@@ -2,6 +2,12 @@
 name = "fast-sync"
 version = "0.0.2"
 edition = "2024"
+description = "A client for the WiFi File Transfer HTTP protocol"
+homepage = "https://github.com/Gordon01/fast-sync"
+documentation = "https://docs.rs/fast-sync"
+repository = "https://github.com/Gordon01/fast-sync"
+keywords = ["android", "file-transfer", "wifi"]
+categories = ["command-line-utilities", "network-programming"]
 
 [dependencies]
 anyhow = "1.0"

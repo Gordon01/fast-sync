@@ -10,6 +10,10 @@ use serde::{Deserialize, de::DeserializeOwned};
 use tracing::{debug, info, trace};
 
 /// Client for the WiFi File Transfer Android app HTTP API.
+///
+/// Construct a client with [`Wft::new`], then use it to query device information
+/// and transfer files.
+#[derive(Clone, Debug)]
 pub struct Wft {
     address: SocketAddr,
     client: reqwest::Client,
@@ -17,11 +21,16 @@ pub struct Wft {
 
 impl Wft {
     /// Pings the WFT server and creates a client for it.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the server cannot be reached, responds with a
+    /// non-success status, or does not return `pong`.
     pub async fn new(address: SocketAddr) -> Result<Self> {
         debug!(%address, "Pinging WFT server");
-        let client = reqwest::Client::new();
-        let url = format!("http://{address}/api/ping");
-        let response = client.get(&url).send().await?;
+        let client = reqwest::Client::builder().build()?;
+        let url = server_url(address, &["api", "ping"])?;
+        let response = client.get(url).send().await?;
         let status = response.status();
         let body = response.bytes().await?;
         if !status.is_success() {
@@ -35,30 +44,47 @@ impl Wft {
         Ok(Self { address, client })
     }
 
-    /// Returns the platform identifier reported by the server.
+    /// Fetches the platform identifier reported by the server.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request fails or the response is an API,
+    /// HTTP, or JSON error.
     pub async fn get_platform_info(&self) -> Result<PlatformInfo> {
-        self.get_json(format!("http://{}/api/get-platform-info", self.address))
+        self.get_json(self.url(&["api", "get-platform-info"])?)
             .await
     }
 
-    /// Returns whether the app has Android's manage-external-storage permission.
+    /// Fetches whether the app has Android's manage-external-storage permission.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request fails or the response is an API,
+    /// HTTP, or JSON error.
     pub async fn check_manage_storage_permission(&self) -> Result<ManageStoragePermission> {
-        self.get_json(format!(
-            "http://{}/api/check-manage-storage-permission",
-            self.address
-        ))
-        .await
-    }
-
-    /// Returns Android SDK and release information.
-    pub async fn get_android_version(&self) -> Result<AndroidVersion> {
-        self.get_json(format!("http://{}/api/get-android-version", self.address))
+        self.get_json(self.url(&["api", "check-manage-storage-permission"])?)
             .await
     }
 
-    /// Returns summaries of the available storage locations.
+    /// Fetches Android SDK and release information.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request fails or the response is an API,
+    /// HTTP, or JSON error.
+    pub async fn get_android_version(&self) -> Result<AndroidVersion> {
+        self.get_json(self.url(&["api", "get-android-version"])?)
+            .await
+    }
+
+    /// Fetches summaries of the available storage locations.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request fails or the response is an API,
+    /// HTTP, or JSON error.
     pub async fn get_storage_details(&self) -> Result<Vec<StorageSummary>> {
-        self.get_json(format!("http://{}/api/get-storage-details", self.address))
+        self.get_json(self.url(&["api", "get-storage-details"])?)
             .await
     }
 
@@ -66,36 +92,25 @@ impl Wft {
     /// `"/storage/emulated/0/DCIM"`.
     ///
     /// The path is appended to `/api/directory/` without a `root` prefix.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidPath`] if `path` is not absolute. Also returns
+    /// an error if the request fails or the response contains an API, HTTP, or
+    /// JSON error.
     pub async fn directory(&self, path: impl AsRef<str>) -> Result<Directory> {
-        let path = path.as_ref();
-        let Some(path) = path.strip_prefix('/') else {
-            return Err(Error::InvalidPath(path.to_owned()));
+        let input = path.as_ref();
+        let Some(path) = input.strip_prefix('/') else {
+            return Err(Error::InvalidPath(input.to_owned()));
         };
         let path = path.strip_suffix('/').unwrap_or(path);
-        let path_segments: Vec<&str> = if path.is_empty() {
-            Vec::new()
+        let mut url_segments = vec!["api", "directory"];
+        if path.is_empty() {
+            url_segments.push("");
         } else {
-            path.split('/').collect()
-        };
-        if path_segments
-            .iter()
-            .any(|segment| segment.is_empty() || *segment == "." || *segment == "..")
-        {
-            return Err(Error::InvalidPath(path.to_owned()));
+            url_segments.extend(path.split('/'));
         }
-
-        let mut url = Url::parse(&format!("http://{}/api/directory", self.address))
-            .map_err(|error| Error::InvalidUrl(error.to_string()))?;
-        {
-            let mut segments = url
-                .path_segments_mut()
-                .expect("HTTP URLs support path segments");
-            if path_segments.is_empty() {
-                segments.push("");
-            } else {
-                segments.extend(path_segments);
-            }
-        }
+        let url = self.url(&url_segments)?;
         let directory: Directory = self.get_json(url.clone()).await?;
         info!(
             url = %url,
@@ -109,24 +124,17 @@ impl Wft {
 
     /// Downloads a file from the server path.
     ///
-    /// Returns the file bytes and elapsed request time.
-    pub async fn download_file(&self, path: impl AsRef<str>) -> Result<(Vec<u8>, Duration)> {
+    /// Returns the file bytes and elapsed request time in a [`DownloadedFile`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request fails or the response contains an API
+    /// or HTTP error.
+    pub async fn download_file(&self, path: impl AsRef<str>) -> Result<DownloadedFile> {
         let start = Instant::now();
         let path = path.as_ref();
         let path = path.strip_prefix('/').unwrap_or(path);
-        let path_segments: Vec<&str> = path.split('/').collect();
-        if path_segments
-            .iter()
-            .any(|segment| segment.is_empty() || *segment == "." || *segment == "..")
-        {
-            return Err(Error::InvalidPath(path.to_owned()));
-        }
-        let mut url = Url::parse(&format!("http://{}/", self.address))
-            .map_err(|error| Error::InvalidUrl(error.to_string()))?;
-        url.path_segments_mut()
-            .expect("HTTP URLs support path segments")
-            .pop_if_empty()
-            .extend(path_segments);
+        let url = self.url(&path.split('/').collect::<Vec<_>>())?;
         let response = self.client.get(url.clone()).send().await?;
         let status = response.status();
         let json_response = response
@@ -148,7 +156,10 @@ impl Wft {
             "downloaded file: status = {status}, size = {}",
             Byte::from(bytes.len()),
         );
-        Ok((bytes.to_vec(), start.elapsed()))
+        Ok(DownloadedFile {
+            bytes: bytes.to_vec(),
+            elapsed: start.elapsed(),
+        })
     }
 
     async fn get_json<T: DeserializeOwned>(&self, url: impl reqwest::IntoUrl) -> Result<T> {
@@ -165,6 +176,20 @@ impl Wft {
 
         Ok(serde_json::from_slice(&body)?)
     }
+
+    fn url(&self, path_segments: &[&str]) -> Result<Url> {
+        server_url(self.address, path_segments)
+    }
+}
+
+fn server_url(address: SocketAddr, path_segments: &[&str]) -> Result<Url> {
+    let mut url = Url::parse(&format!("http://{address}/"))
+        .map_err(|error| Error::InvalidUrl(error.to_string()))?;
+    url.path_segments_mut()
+        .expect("HTTP URLs support path segments")
+        .pop_if_empty()
+        .extend(path_segments.iter().copied());
+    Ok(url)
 }
 
 fn http_status_error(status: StatusCode, body: &[u8]) -> Error {
@@ -175,75 +200,49 @@ fn http_status_error(status: StatusCode, body: &[u8]) -> Error {
 }
 
 /// Platform identifier returned by `/api/get-platform-info`.
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub struct PlatformInfo {
+    /// Platform identifier, such as `"android"`.
     pub platform: String,
 }
 
 /// Permission state returned by `/api/check-manage-storage-permission`.
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub struct ManageStoragePermission {
+    /// Whether Android's manage-external-storage permission is granted.
     #[serde(rename = "isExternalStorageManager")]
     pub is_external_storage_manager: bool,
 }
 
 /// Android version returned by `/api/get-android-version`.
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub struct AndroidVersion {
+    /// Android SDK version number.
     #[serde(rename = "SDK_INT")]
     pub sdk_int: u32,
+    /// Android release identifier.
     #[serde(rename = "RELEASE")]
     pub release: String,
 }
 
 /// One storage location returned by `/api/get-storage-details`.
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub struct StorageSummary {
+    /// Path of the storage entry.
     pub path: String,
+    /// Size in bytes of this storage entry.
     pub size: u64,
+    /// Display name of this storage entry.
     pub name: String,
+    /// Total capacity in bytes of the storage root.
     #[serde(rename = "totalBytes")]
     pub total_bytes: u64,
+    /// Absolute path of the storage root.
     #[serde(rename = "rootPath")]
     pub root_path: String,
+    /// Available capacity in bytes of the storage root.
     #[serde(rename = "availableBytes")]
     pub available_bytes: u64,
-}
-
-impl StorageSummary {
-    /// Prints the storage roots and media sizes reported by the server.
-    pub fn print_storage_info(storages: &[Self]) {
-        if storages.is_empty() {
-            println!("No storage information returned.");
-            return;
-        }
-
-        let mut roots: Vec<(&str, Vec<&Self>)> = Vec::new();
-        for storage in storages {
-            if let Some((_, entries)) = roots
-                .iter_mut()
-                .find(|(root_path, _)| *root_path == storage.root_path)
-            {
-                entries.push(storage);
-            } else {
-                roots.push((&storage.root_path, vec![storage]));
-            }
-        }
-
-        for (root_path, entries) in roots {
-            let total_bytes = entries[0].total_bytes;
-            let available_bytes = entries[0].available_bytes;
-            println!(
-                "{root_path}: {} used of {} ({} free)",
-                Byte::from(total_bytes.saturating_sub(available_bytes)),
-                Byte::from(total_bytes),
-                Byte::from(available_bytes)
-            );
-            for storage in entries {
-                println!("  {storage}");
-            }
-        }
-    }
 }
 
 impl fmt::Display for StorageSummary {
@@ -253,22 +252,38 @@ impl fmt::Display for StorageSummary {
 }
 
 /// Directory listing returned by the WFT API.
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub struct Directory {
+    /// Directories in the listing.
     #[serde(default)]
     pub directories: Vec<Entry>,
+    /// Files in the listing.
     #[serde(default)]
     pub files: Vec<Entry>,
 }
 
 /// A file or directory in a listing.
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub struct Entry {
+    /// Entry name.
     pub name: String,
+    /// Entry size in bytes.
     pub size: u64,
+    /// Absolute server path of the entry.
     pub path: String,
+    /// Modification timestamp reported by the server.
     pub modified: u64,
+    /// File extension, or an empty string when none is reported.
     pub extension: String,
+}
+
+/// Bytes downloaded from WFT and the elapsed request time.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DownloadedFile {
+    /// Downloaded file contents.
+    pub bytes: Vec<u8>,
+    /// Time spent performing the download request.
+    pub elapsed: Duration,
 }
 
 #[derive(Debug, Deserialize)]
@@ -276,22 +291,45 @@ struct ApiErrorResponse {
     error: String,
 }
 
+/// Result type used by the WFT client.
 pub type Result<T> = core::result::Result<T, Error>;
 
+/// Errors returned by the WFT client.
+#[non_exhaustive]
 #[derive(thiserror::Error, Debug)]
 pub enum Error {
+    /// The WFT API returned an error payload.
     #[error("WFT API error: {0}")]
     Api(String),
+    /// The server returned a non-success HTTP status.
     #[error("HTTP request failed with status {status}: {body}")]
     HttpStatus { status: u16, body: String },
+    /// A server path is not valid for the requested operation.
     #[error("invalid server path: {0}")]
     InvalidPath(String),
+    /// A request URL could not be constructed.
     #[error("invalid request URL: {0}")]
     InvalidUrl(String),
+    /// The HTTP client could not be built or a request failed.
     #[error("network failure: {0}")]
     NetworkFailure(#[from] reqwest::Error),
+    /// A JSON response could not be decoded.
     #[error("unexpected data format: {0}")]
     UnexpectedFormat(#[from] serde_json::Error),
+    /// The ping endpoint did not return `pong`.
     #[error("unexpected ping response: {0}")]
     UnexpectedPingResponse(String),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn server_url_encodes_path_segments_and_preserves_trailing_empty_segment() {
+        let address = SocketAddr::from(([127, 0, 0, 1], 1234));
+        let url = server_url(address, &["api", "directory", "a b", ""]).unwrap();
+
+        assert_eq!(url.as_str(), "http://127.0.0.1:1234/api/directory/a%20b/");
+    }
 }
