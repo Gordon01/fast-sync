@@ -1,5 +1,4 @@
 mod stats;
-mod wft;
 
 use std::{
     net::{IpAddr, SocketAddr},
@@ -7,12 +6,12 @@ use std::{
 };
 
 use anyhow::Context;
-use clap::Parser;
+use clap::{Parser, Subcommand};
+use fast_sync::wft::{Directory, StorageSummary, Wft};
 use readable::{byte::Byte, up::Uptime};
 use stats::TransferStats;
 use tracing::{debug, info};
 use tracing_subscriber::EnvFilter;
-use wft::{Directory, Wft};
 
 /// Syncs files from a Wi‑Fi File Transfer server to the local filesystem.
 #[derive(Debug, Parser)]
@@ -23,16 +22,29 @@ struct Cli {
     ip: IpAddr,
 
     /// Server port.
-    #[arg(long, short, default_value_t = 1234)]
+    #[arg(long, short, default_value_t = 1234, global = true)]
     port: u16,
 
-    /// Remote directory to sync.
-    #[arg(long, short, default_value = "/DCIM/Camera")]
+    /// Storage root to sync from.
+    #[arg(long, default_value = "/storage/emulated/0")]
+    storage: String,
+
+    /// Directory within the selected storage to sync.
+    #[arg(long, short, default_value = "DCIM/Camera")]
     directory: String,
 
     /// Local output directory.
     #[arg(long, short, default_value = "out")]
     output: PathBuf,
+
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Show server-reported storage and media sizes.
+    StorageInfo,
 }
 
 #[tokio::main]
@@ -43,10 +55,55 @@ async fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
     debug!("CL arguments: {cli:#?}");
-    let wft = Wft::new(SocketAddr::new(cli.ip, cli.port));
-    let directory = wft.directory(&cli.directory).await?;
+    let wft = Wft::new(SocketAddr::new(cli.ip, cli.port)).await?;
+    if matches!(cli.command, Some(Command::StorageInfo)) {
+        let storages = wft.get_storage_details().await?;
+        StorageSummary::print_storage_info(&storages);
+        return Ok(());
+    }
 
-    process_files(&cli, &directory, &wft).await
+    let storages = wft.get_storage_details().await?;
+    if storages.is_empty() {
+        anyhow::bail!("WFT returned no storage details");
+    }
+    let selected_root = cli.storage.trim_end_matches('/');
+    let selected_storage = storages
+        .iter()
+        .find(|storage| storage.root_path.trim_end_matches('/') == selected_root);
+    let Some(selected_storage) = selected_storage else {
+        let mut available = Vec::new();
+        for storage in &storages {
+            if !available.contains(&storage.root_path.as_str()) {
+                available.push(storage.root_path.as_str());
+            }
+        }
+        anyhow::bail!(
+            "Storage root {:?} was not reported by WFT. Available storage roots: {}",
+            cli.storage,
+            available.join(", ")
+        );
+    };
+    info!(
+        "Selected storage {} ({} total bytes)",
+        selected_storage.root_path, selected_storage.total_bytes
+    );
+    let directory = cli.directory.trim_matches('/');
+    let remote_directory = if directory.is_empty() {
+        selected_root.to_owned()
+    } else if cli.directory == selected_root
+        || cli.directory.starts_with(&format!("{selected_root}/"))
+    {
+        cli.directory.trim_end_matches('/').to_owned()
+    } else if cli.directory.starts_with('/') {
+        anyhow::bail!(
+            "--directory must be relative to the selected storage ({selected_root}) or be inside it"
+        );
+    } else {
+        format!("{selected_root}/{directory}")
+    };
+    let directory = wft.directory(&remote_directory).await?;
+
+    process_files(&cli, &remote_directory, &directory, &wft).await
 }
 
 #[derive(Debug)]
@@ -57,10 +114,15 @@ enum FileStatus {
 }
 
 /// Downloads files that are missing or newer/changed on the remote endpoint.
-async fn process_files(cli: &Cli, directory: &Directory, wft: &Wft) -> anyhow::Result<()> {
+async fn process_files(
+    cli: &Cli,
+    remote_directory: &str,
+    directory: &Directory,
+    wft: &Wft,
+) -> anyhow::Result<()> {
     let out_dir = {
         let mut dir = cli.output.clone();
-        dir.extend(cli.directory.split('/'));
+        dir.extend(remote_directory.split('/').filter(|part| !part.is_empty()));
         dir
     };
     std::fs::create_dir_all(&out_dir)?;
@@ -82,7 +144,7 @@ async fn process_files(cli: &Cli, directory: &Directory, wft: &Wft) -> anyhow::R
             continue;
         }
 
-        let out_path = format!("{}/{}", cli.directory.trim_end_matches('/'), file.name);
+        let out_path = format!("{}/{}", remote_directory.trim_end_matches('/'), file.name);
         let (bytes, download_time) = wft.download_file(&out_path).await?;
         std::fs::write(&out_file, &bytes)
             .with_context(|| format!("Failed to write output file {:?}", out_file))?;

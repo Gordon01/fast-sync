@@ -6,6 +6,14 @@ no custom request headers.
 
 ## Endpoints
 
+- ### `GET /api/ping`
+
+Checks that the server is reachable. A successful response has the plain-text body `pong`.
+
+```text
+pong
+```
+
 - ### `GET /api/get-platform-info`
 
 Returns platform information as a JSON object with a `platform` string.

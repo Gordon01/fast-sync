@@ -1,0 +1,58 @@
+# Using the WFT Rust API
+
+`Wft` connects to the WiFi File Transfer Android app over HTTP. The crate exposes it as
+`fast_sync::wft::Wft`. Create one client for the device address and use its async methods to query
+device information, inspect storage, and list or download files.
+
+```rust
+use std::net::SocketAddr;
+
+use fast_sync::wft::Wft;
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let address: SocketAddr = "192.0.2.10:1234".parse()?;
+    let wft = Wft::new(address).await?;
+
+    let platform = wft.get_platform_info().await?;
+    println!("Platform: {}", platform.platform);
+
+    let permission = wft.check_manage_storage_permission().await?;
+    println!(
+        "Can manage external storage: {}",
+        permission.is_external_storage_manager
+    );
+
+    let version = wft.get_android_version().await?;
+    println!("Android {} (SDK {})", version.release, version.sdk_int);
+
+    let storage = wft
+        .get_storage_details()
+        .await?
+        .into_iter()
+        .max_by_key(|storage| storage.total_bytes)
+        .ok_or("the server returned no storage details")?;
+    println!(
+        "Selected {} ({} bytes total)",
+        storage.root_path, storage.total_bytes
+    );
+
+    let directory_path = format!("{}/DCIM", storage.root_path.trim_end_matches('/'));
+    let directory = wft.directory(&directory_path).await?;
+    for file in directory.files {
+        let (bytes, elapsed) = wft.download_file(&file.path).await?;
+        println!("Downloaded {} bytes from {} in {elapsed:?}", bytes.len(), file.path);
+    }
+
+    Ok(())
+}
+```
+
+The program selects the storage root with the greatest `total_bytes`. For a directory listing,
+pass an absolute Android storage path. The WFT API route is formed by appending that path after
+`/api/directory/`, without inserting a `root` component.
+
+`Wft::new` takes a `SocketAddr`, pings `/api/ping`, and returns an error if the server is
+unreachable or does not reply with `pong`; specify the server port explicitly if it is not `1234`.
+Methods return `wft::Result<T>` and report network errors, HTTP failures, API error payloads,
+invalid paths, and malformed JSON through `wft::Error`.

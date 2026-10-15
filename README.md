@@ -4,7 +4,9 @@
 
 ## How synchronization works
 
-For the requested remote directory, the program:
+The program uses `/storage/emulated/0` by default; use `--storage` to choose another storage root.
+The `--directory` argument identifies a directory within that root (default: `DCIM/Camera`). For
+the requested remote directory, the program:
 
 1. Requests the directory listing from the device.
 2. Creates the corresponding directory under the local output root.
@@ -18,7 +20,7 @@ The comparison uses file size only; modification times and file contents are not
 
 ## Example
 
-Suppose the remote `/Pictures` directory contains:
+Suppose the selected storage has a `Pictures` directory containing:
 
 ```text
 photo-a.jpg  4096 bytes
@@ -36,10 +38,10 @@ out/
     └── notes.txt      # local-only file
 ```
 
-Run the program for `/Pictures`:
+Run the program for the `Pictures` directory within the selected storage:
 
 ```sh
-fast-sync --ip 192.168.1.111 --directory /Pictures
+fast-sync --ip 192.168.1.111 --directory Pictures
 ```
 
 After a successful run:
@@ -55,25 +57,32 @@ out/
 
 ## Usage
 
-The server port defaults to `1234`, the remote directory to `/DCIM/Camera`, and the local output root to `out`.
+The server port defaults to `1234`, the directory within the selected storage to `DCIM/Camera`,
+the storage root to `/storage/emulated/0`, and the local output root to `out`.
 
 ```sh
 fast-sync --ip 192.168.1.111
-fast-sync --ip 192.168.1.111 --directory /Pictures --output phone-backup
+fast-sync --ip 192.168.1.111 --storage /storage/ABCD-1234 --directory Pictures --output phone-backup
+fast-sync storage-info --ip 192.168.1.111
 ```
+
+`storage-info` displays the media sizes and total/available space reported by the server. These
+are server-provided summaries; the command does not recursively scan directories.
 
 Build or run with Nix:
 
 ```sh
 nix build .#fast-sync
-nix run .#fast-sync -- --ip 192.168.1.111 --directory /Pictures
+nix run .#fast-sync -- --ip 192.168.1.111 --directory Pictures
 ```
 
 For local development, install [Nix](https://nixos.org/) and [direnv](https://direnv.net/), then allow the project environment:
 
 ```sh
 direnv allow
-cargo run -- --ip 192.168.1.111 --directory /Pictures
+cargo run -- --ip 192.168.1.111 --directory Pictures
 ```
 
 The Nix development shell provides Cargo, rustfmt, Clippy, and Rust standard-library sources for rust-analyzer.
+
+The reusable Rust API is documented in [`src/wft/README.md`](src/wft/README.md).
