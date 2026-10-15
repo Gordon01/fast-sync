@@ -32,20 +32,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         wft.storages().total_bytes()
     );
 
+    wft.set_output_path("out");
     let entries = wft.directory("DCIM").await?;
     for entry in entries {
         match entry {
             fast_sync::wft::DirectoryEntry::Directory(directory) => {
                 println!("Directory: {}", directory.path);
             }
-            fast_sync::wft::DirectoryEntry::File(file) => {
-                let download = wft.download_file(&file.path).await?;
-                println!(
-                    "Downloaded {} bytes from {} in {:?}",
-                    download.bytes.len(),
-                    file.path,
-                    download.elapsed
-                );
+            fast_sync::wft::DirectoryEntry::File(file, local_path, status) => {
+                println!("File {}: {status:?}", file.path);
+                println!("Local path: {}", local_path.display());
             }
         }
     }
@@ -55,10 +51,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 The program selects the storage root with the greatest `total_bytes`. To list a directory, pass its
-path relative to the selected root; for example, `"Pictures/Whatsapp"`. The returned iterator
-contains `DirectoryEntry::Directory` values first, followed by `DirectoryEntry::File` values. The
-WFT API route appends the selected root and relative path after `/api/directory/`, without inserting
-a `root` component.
+path relative to the selected root; for example, `"Pictures/Whatsapp"`. Configure the local output
+root with `Wft::set_output_path` (default `"out"`); `Wft::directory` returns an iterator directly.
+It yields
+`DirectoryEntry::Directory` values first, followed by `DirectoryEntry::File` values; each file
+includes its local path and `FileStatus`. `Wft::directory` creates the corresponding local output
+directory. The WFT API route appends the selected root and relative path after `/api/directory/`,
+without inserting a `root` component.
 
 `download_file` returns a `DownloadedFile` containing the downloaded `bytes` and request `elapsed`
 time.

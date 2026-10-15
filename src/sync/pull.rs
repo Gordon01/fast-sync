@@ -13,51 +13,26 @@ use crate::stats::TransferStats;
 pub struct PullArgs {
     /// Storage root to sync from.
     #[arg(long, short)]
-    storage: Option<String>,
+    pub storage: Option<String>,
 
     /// Relative directory within the selected storage to sync.
     #[arg(long, short, default_value = "DCIM/Camera")]
-    directory: String,
+    pub directory: String,
 
     /// Local output directory.
     #[arg(long, short, default_value = "out")]
-    output: PathBuf,
-}
-
-pub async fn run(wft: &mut Wft, args: &PullArgs) -> anyhow::Result<()> {
-    if let Some(root_path) = args.storage.as_deref() {
-        wft.storages().select(root_path)?;
-    }
-    let selected_root = wft.storages().root_path().to_owned();
-    let total_bytes = wft.storages().total_bytes();
-
-    info!(
-        "Selected storage {} ({} total bytes)",
-        selected_root, total_bytes
-    );
-
-    validate_directory(&args.directory)?;
-    let entries = wft.directory(&args.directory).await?;
-
-    process_files(args, entries.into_entries(), wft).await
+    pub output: PathBuf,
 }
 
 /// Downloads files that are missing or differ in size or modification time.
-async fn process_files(
-    args: &PullArgs,
-    entries: impl Iterator<Item = DirectoryEntry>,
-    wft: &Wft,
-) -> anyhow::Result<()> {
-    let out_dir = args.output.join(&args.directory);
-    std::fs::create_dir_all(&out_dir)?;
-
+pub async fn pull(wft: &Wft, directory: String) -> anyhow::Result<()> {
+    let entries = wft.directory(&directory).await?;
     let mut files = Vec::new();
     for entry in entries {
-        let DirectoryEntry::File(file) = entry else {
+        let DirectoryEntry::File(file, out_file, status) = entry else {
             continue;
         };
-        let out_file = out_dir.join(&file.name);
-        let status = match file.compare_local_file(&out_file) {
+        let status = match status {
             FileStatus::MetadataError(error) | FileStatus::ModifiedTimeError(error) => {
                 return Err(error).with_context(|| format!("Failed to inspect {:?}", out_file));
             }
@@ -115,24 +90,6 @@ async fn process_files(
         );
     }
 
-    Ok(())
-}
-
-fn validate_directory(directory: &str) -> anyhow::Result<()> {
-    if directory.is_empty() {
-        return Ok(());
-    }
-    if directory.starts_with('/') {
-        anyhow::bail!("--directory must be relative to the selected storage");
-    }
-
-    if directory.split('/').any(|component| {
-        component.is_empty() || matches!(component, "." | "..") || component.contains('\\')
-    }) {
-        anyhow::bail!(
-            "--directory must not contain empty, '.' or '..' path components or backslashes"
-        );
-    }
     Ok(())
 }
 

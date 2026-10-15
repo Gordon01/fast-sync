@@ -46,8 +46,8 @@ pub struct StorageRoot {
 /// Storage roots reported by WFT, with one root selected and entry sizes cached.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Storages {
-    roots: Vec<StorageRoot>,
-    selected: usize,
+    pub roots: Vec<StorageRoot>,
+    pub selected: usize,
 }
 
 impl Storages {
@@ -79,17 +79,6 @@ impl Storages {
         Ok(Self { roots, selected })
     }
 
-    pub fn select(&mut self, root_path: impl AsRef<str>) -> Result<()> {
-        let root_path = root_path.as_ref();
-        let selected = self
-            .roots
-            .iter()
-            .position(|root| root.root_path == root_path)
-            .ok_or_else(|| Error::StorageNotFound(root_path.to_owned()))?;
-        self.selected = selected;
-        Ok(())
-    }
-
     /// Returns all reported storage roots.
     pub fn roots(&self) -> &[StorageRoot] {
         &self.roots
@@ -98,21 +87,6 @@ impl Storages {
     /// Returns the selected storage root.
     pub fn selected_root(&self) -> &StorageRoot {
         &self.roots[self.selected]
-    }
-
-    /// Returns the selected storage root path.
-    pub fn root_path(&self) -> &str {
-        &self.selected_root().root_path
-    }
-
-    /// Returns the selected storage's total capacity in bytes.
-    pub fn total_bytes(&self) -> u64 {
-        self.selected_root().total_bytes
-    }
-
-    /// Returns the selected storage's available capacity in bytes.
-    pub fn available_bytes(&self) -> u64 {
-        self.selected_root().available_bytes
     }
 }
 

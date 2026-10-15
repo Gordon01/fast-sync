@@ -1,6 +1,6 @@
 use std::{
     net::SocketAddr,
-    path::Path,
+    path::{Path, PathBuf},
     time::{Duration, Instant, UNIX_EPOCH},
 };
 
@@ -21,6 +21,7 @@ pub struct Wft {
     address: SocketAddr,
     client: reqwest::Client,
     storages: Storages,
+    output_path: PathBuf,
 }
 
 impl Wft {
@@ -55,12 +56,32 @@ impl Wft {
             address,
             client,
             storages: Storages::new(storages)?,
+            output_path: PathBuf::from("out"),
         })
     }
 
+    /// Sets the local output root used to compare files returned by
+    /// [`Wft::directory`].
+    pub fn set_output_path(&mut self, path: impl Into<PathBuf>) -> std::io::Result<()> {
+        self.output_path = path.into();
+        std::fs::create_dir_all(&self.output_path)
+    }
+
     /// Returns storage details fetched when this client was constructed.
-    pub fn storages(&mut self) -> &mut Storages {
-        &mut self.storages
+    pub fn storages(&self) -> &Storages {
+        &self.storages
+    }
+
+    pub fn select_storage(&mut self, root_path: impl AsRef<str>) -> Result<()> {
+        let root_path = root_path.as_ref();
+        let selected = self
+            .storages
+            .roots
+            .iter()
+            .position(|root| root.root_path == root_path)
+            .ok_or_else(|| Error::StorageNotFound(root_path.to_owned()))?;
+        self.storages.selected = selected;
+        Ok(())
     }
 
     /// Fetches the platform identifier reported by the server.
@@ -101,16 +122,18 @@ impl Wft {
     /// `"Pictures/Whatsapp"`.
     ///
     /// The selected root is prepended to `path`, then appended to
-    /// `/api/directory/` without a `root` prefix. Returns directories followed
-    /// by files.
+    /// `/api/directory/` without a `root` prefix. The relative path is also
+    /// joined to the configured output root to determine each file's
+    /// [`FileStatus`].
     ///
     /// # Errors
     ///
     /// Returns [`Error::InvalidPath`] if `path` is not a valid relative path.
     /// Also returns an error if the request fails or the response contains an
     /// API, HTTP, or JSON error.
-    pub async fn directory(&self, path: impl AsRef<str>) -> Result<Directory> {
-        let path = directory_path(self.storages.root_path(), path.as_ref())?;
+    pub async fn directory(&self, path: impl AsRef<str>) -> Result<DirectoryIterator> {
+        let relative_path = path.as_ref();
+        let path = directory_path(&self.storages.selected_root().root_path, relative_path)?;
         let path = path.strip_prefix('/').expect("storage root is absolute");
         let mut url_segments = vec!["api", "directory"];
         if path.is_empty() {
@@ -127,7 +150,14 @@ impl Wft {
             directory.directories.len(),
             directory.files.len(),
         );
-        Ok(directory)
+        let local_directory = self.output_path.join(relative_path);
+        std::fs::create_dir_all(&local_directory).map_err(|source| {
+            Error::OutputDirectory {
+                path: local_directory.clone(),
+                source,
+            }
+        })?;
+        Ok(directory.iter(local_directory))
     }
 
     /// Downloads a file from the server path.
@@ -248,21 +278,61 @@ pub struct Directory {
 }
 
 impl Directory {
-    pub fn into_entries(self) -> impl Iterator<Item = DirectoryEntry> {
-        self.directories
-            .into_iter()
-            .map(DirectoryEntry::Directory)
-            .chain(self.files.into_iter().map(DirectoryEntry::File))
+    /// Consumes this listing and iterates its entries using `local_directory`
+    /// to determine the status of each local file.
+    ///
+    /// Directories are yielded before files.
+    pub fn iter(self, local_directory: impl Into<PathBuf>) -> DirectoryIterator {
+        DirectoryIterator {
+            directory: self,
+            local_directory: local_directory.into(),
+            next_directory: 0,
+            next_file: 0,
+        }
     }
 }
 
-/// A file or directory returned by [`Wft::directory`].
-#[derive(Clone, Debug, Eq, PartialEq)]
+/// Iterator over the entries in a directory listing.
+pub struct DirectoryIterator {
+    directory: Directory,
+    local_directory: PathBuf,
+    next_directory: usize,
+    next_file: usize,
+}
+
+impl Iterator for DirectoryIterator {
+    type Item = DirectoryEntry;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(directory) = self.directory.directories.get(self.next_directory) {
+            self.next_directory += 1;
+            return Some(DirectoryEntry::Directory(directory.clone()));
+        }
+
+        let file = self.directory.files.get(self.next_file)?;
+        self.next_file += 1;
+        let local_path = self.local_directory.join(&file.name);
+        let status = file.compare_local_file(&local_path);
+        Some(DirectoryEntry::File(file.clone(), local_path, status))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let remaining = self.directory.directories.len() - self.next_directory
+            + self.directory.files.len()
+            - self.next_file;
+        (remaining, Some(remaining))
+    }
+}
+
+impl ExactSizeIterator for DirectoryIterator {}
+
+/// A file or directory returned by [`DirectoryIterator`].
+#[derive(Debug)]
 pub enum DirectoryEntry {
     /// A child directory.
     Directory(Entry),
     /// A file contained in the listed directory.
-    File(Entry),
+    File(Entry, PathBuf, FileStatus),
 }
 
 /// A file or directory in a listing.
@@ -398,4 +468,11 @@ pub enum Error {
     /// The requested storage root was not reported by WFT.
     #[error("storage root {0:?} was not reported by WFT")]
     StorageNotFound(String),
+    /// The local output directory could not be created.
+    #[error("failed to create output directory {path:?}: {source}")]
+    OutputDirectory {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 }

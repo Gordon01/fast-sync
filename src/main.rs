@@ -1,5 +1,5 @@
-mod pull;
 mod stats;
+mod sync;
 
 use std::net::{IpAddr, SocketAddr};
 
@@ -27,7 +27,7 @@ struct Cli {
 #[derive(Debug, Subcommand)]
 enum Command {
     /// Download files from a server directory.
-    Pull(pull::PullArgs),
+    Pull(sync::PullArgs),
     /// Show server-reported storage and media sizes.
     StorageInfo,
 }
@@ -42,7 +42,14 @@ async fn main() -> anyhow::Result<()> {
     debug!("CL arguments: {cli:#?}");
     let mut wft = Wft::new(SocketAddr::new(cli.ip, cli.port)).await?;
     match cli.command {
-        Command::Pull(args) => pull::run(&mut wft, &args).await,
+        Command::Pull(args) => {
+            if let Some(storage) = args.storage {
+                wft.select_storage(storage)?;
+            }
+            wft.set_output_path(args.output.clone())?;
+            sync::pull(&wft, args.directory).await?;
+            Ok(())
+        }
         Command::StorageInfo => {
             println!("{}", wft.storages());
             Ok(())
