@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use clap::Args;
-use fast_sync::wft::{Directory, Storage, Wft};
+use fast_sync::wft::{Directory, Wft};
 use readable::{byte::Byte, up::Uptime};
 use tracing::{debug, info};
 
@@ -14,7 +14,7 @@ pub struct PullArgs {
     #[arg(long, short)]
     storage: Option<String>,
 
-    /// Directory within the selected storage to sync.
+    /// Relative directory within the selected storage to sync.
     #[arg(long, short, default_value = "DCIM/Camera")]
     directory: String,
 
@@ -30,53 +30,28 @@ enum FileStatus {
     Outdated,
 }
 
-pub async fn run(wft: &Wft, args: &PullArgs) -> anyhow::Result<()> {
-    let storages = wft.get_storage_details().await?;
-    if storages.is_empty() {
-        anyhow::bail!("WFT returned no storage details");
+pub async fn run(wft: &mut Wft, args: &PullArgs) -> anyhow::Result<()> {
+    let mut storages = wft.storages().clone();
+    if let Some(root_path) = args.storage.as_deref() {
+        storages.select(root_path)?;
     }
-    let selected_storage = select_storage(&storages, args.storage.as_deref())?;
-    let selected_root = selected_storage.root_path.as_str();
+    let selected_root = storages.root_path();
 
     info!(
         "Selected storage {} ({} total bytes)",
-        selected_storage.root_path, selected_storage.total_bytes
+        selected_root,
+        storages.total_bytes()
     );
 
-    let directory = args.directory.trim_matches('/');
-    let remote_directory = if directory.is_empty() {
+    validate_directory(&args.directory)?;
+    let remote_directory = if args.directory.is_empty() {
         selected_root.to_owned()
-    } else if args.directory == selected_root
-        || args.directory.starts_with(&format!("{selected_root}/"))
-    {
-        args.directory.trim_end_matches('/').to_owned()
-    } else if args.directory.starts_with('/') {
-        anyhow::bail!(
-            "--directory must be relative to the selected storage ({selected_root}) or be inside it"
-        );
     } else {
-        format!("{selected_root}/{directory}")
+        format!("{}/{}", selected_root.trim_end_matches('/'), args.directory)
     };
     let directory = wft.directory(&remote_directory).await?;
 
     process_files(args, &remote_directory, &directory, wft).await
-}
-
-fn select_storage<'a>(
-    storages: &'a [Storage],
-    requested_root: Option<&str>,
-) -> anyhow::Result<&'a Storage> {
-    if let Some(storage) = requested_root {
-        return storages
-            .iter()
-            .find(|summary| summary.root_path == storage)
-            .with_context(|| format!("Storage root {storage:?} was not reported by WFT"));
-    }
-
-    storages
-        .iter()
-        .max_by_key(|summary| summary.total_bytes)
-        .context("WFT returned no storage details")
 }
 
 /// Downloads files that are missing or newer/changed on the remote endpoint.
@@ -86,11 +61,7 @@ async fn process_files(
     directory: &Directory,
     wft: &Wft,
 ) -> anyhow::Result<()> {
-    let out_dir = {
-        let mut dir = args.output.clone();
-        dir.extend(remote_directory.split('/').filter(|part| !part.is_empty()));
-        dir
-    };
+    let out_dir = args.output.join(&args.directory);
     std::fs::create_dir_all(&out_dir)?;
 
     let total_bytes: u64 = directory.files.iter().map(|e| e.size).sum();
@@ -131,6 +102,24 @@ async fn process_files(
         );
     }
 
+    Ok(())
+}
+
+fn validate_directory(directory: &str) -> anyhow::Result<()> {
+    if directory.is_empty() {
+        return Ok(());
+    }
+    if directory.starts_with('/') {
+        anyhow::bail!("--directory must be relative to the selected storage");
+    }
+
+    if directory.split('/').any(|component| {
+        component.is_empty() || matches!(component, "." | "..") || component.contains('\\')
+    }) {
+        anyhow::bail!(
+            "--directory must not contain empty, '.' or '..' path components or backslashes"
+        );
+    }
     Ok(())
 }
 

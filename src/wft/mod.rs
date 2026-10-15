@@ -1,8 +1,10 @@
 use std::{
-    fmt,
     net::SocketAddr,
     time::{Duration, Instant},
 };
+
+mod storage;
+pub use storage::{Storage, Storages};
 
 use readable::byte::Byte;
 use reqwest::{StatusCode, Url};
@@ -17,15 +19,16 @@ use tracing::{debug, info, trace};
 pub struct Wft {
     address: SocketAddr,
     client: reqwest::Client,
+    storages: Storages,
 }
 
 impl Wft {
-    /// Pings the WFT server and creates a client for it.
+    /// Pings the WFT server, fetches storage details, and creates a client for it.
     ///
     /// # Errors
     ///
     /// Returns an error if the server cannot be reached, responds with a
-    /// non-success status, or does not return `pong`.
+    /// non-success status, does not return `pong`, or returns no storage details.
     pub async fn new(address: SocketAddr) -> Result<Self> {
         debug!(%address, "Pinging WFT server");
         let client = reqwest::Client::builder().build()?;
@@ -41,7 +44,22 @@ impl Wft {
             return Err(Error::UnexpectedPingResponse(body.into_owned()));
         }
 
-        Ok(Self { address, client })
+        let storages = Self::get_json(
+            &client,
+            server_url(address, &["api", "get-storage-details"])?,
+        )
+        .await?;
+
+        Ok(Self {
+            address,
+            client,
+            storages: Storages::new(storages)?,
+        })
+    }
+
+    /// Returns storage details fetched when this client was constructed.
+    pub fn storages(&mut self) -> &mut Storages {
+        &mut self.storages
     }
 
     /// Fetches the platform identifier reported by the server.
@@ -51,8 +69,7 @@ impl Wft {
     /// Returns an error if the request fails or the response is an API,
     /// HTTP, or JSON error.
     pub async fn get_platform_info(&self) -> Result<PlatformInfo> {
-        self.get_json(self.url(&["api", "get-platform-info"])?)
-            .await
+        Self::get_json(&self.client, self.url(&["api", "get-platform-info"])?).await
     }
 
     /// Fetches whether the app has Android's manage-external-storage permission.
@@ -62,8 +79,11 @@ impl Wft {
     /// Returns an error if the request fails or the response is an API,
     /// HTTP, or JSON error.
     pub async fn check_manage_storage_permission(&self) -> Result<ManageStoragePermission> {
-        self.get_json(self.url(&["api", "check-manage-storage-permission"])?)
-            .await
+        Self::get_json(
+            &self.client,
+            self.url(&["api", "check-manage-storage-permission"])?,
+        )
+        .await
     }
 
     /// Fetches Android SDK and release information.
@@ -73,19 +93,7 @@ impl Wft {
     /// Returns an error if the request fails or the response is an API,
     /// HTTP, or JSON error.
     pub async fn get_android_version(&self) -> Result<AndroidVersion> {
-        self.get_json(self.url(&["api", "get-android-version"])?)
-            .await
-    }
-
-    /// Fetches summaries of the available storage locations.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the request fails or the response is an API,
-    /// HTTP, or JSON error.
-    pub async fn get_storage_details(&self) -> Result<Vec<Storage>> {
-        self.get_json(self.url(&["api", "get-storage-details"])?)
-            .await
+        Self::get_json(&self.client, self.url(&["api", "get-android-version"])?).await
     }
 
     /// Lists a directory using its absolute storage path, such as
@@ -111,7 +119,7 @@ impl Wft {
             url_segments.extend(path.split('/'));
         }
         let url = self.url(&url_segments)?;
-        let directory: Directory = self.get_json(url.clone()).await?;
+        let directory: Directory = Self::get_json(&self.client, url.clone()).await?;
         info!(
             url = %url,
             path,
@@ -162,8 +170,11 @@ impl Wft {
         })
     }
 
-    async fn get_json<T: DeserializeOwned>(&self, url: impl reqwest::IntoUrl) -> Result<T> {
-        let response = self.client.get(url).send().await?;
+    async fn get_json<T: DeserializeOwned>(
+        client: &reqwest::Client,
+        url: impl reqwest::IntoUrl,
+    ) -> Result<T> {
+        let response = client.get(url).send().await?;
         let status = response.status();
         let body = response.bytes().await?;
 
@@ -223,32 +234,6 @@ pub struct AndroidVersion {
     /// Android release identifier.
     #[serde(rename = "RELEASE")]
     pub release: String,
-}
-
-/// One storage location returned by `/api/get-storage-details`.
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
-pub struct Storage {
-    /// Path of the storage entry.
-    pub path: String,
-    /// Size in bytes of this storage entry.
-    pub size: u64,
-    /// Display name of this storage entry.
-    pub name: String,
-    /// Total capacity in bytes of the storage root.
-    #[serde(rename = "totalBytes")]
-    pub total_bytes: u64,
-    /// Absolute path of the storage root.
-    #[serde(rename = "rootPath")]
-    pub root_path: String,
-    /// Available capacity in bytes of the storage root.
-    #[serde(rename = "availableBytes")]
-    pub available_bytes: u64,
-}
-
-impl fmt::Display for Storage {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{}: {}", self.name, Byte::from(self.size))
-    }
 }
 
 /// Directory listing returned by the WFT API.
@@ -319,6 +304,12 @@ pub enum Error {
     /// The ping endpoint did not return `pong`.
     #[error("unexpected ping response: {0}")]
     UnexpectedPingResponse(String),
+    /// The storage endpoint returned no storage entries.
+    #[error("WFT returned no storage details")]
+    NoStorages,
+    /// The requested storage root was not reported by WFT.
+    #[error("storage root {0:?} was not reported by WFT")]
+    StorageNotFound(String),
 }
 
 #[cfg(test)]

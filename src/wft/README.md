@@ -26,18 +26,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let version = wft.get_android_version().await?;
     println!("Android {} (SDK {})", version.release, version.sdk_int);
 
-    let storage = wft
-        .get_storage_details()
-        .await?
-        .into_iter()
-        .max_by_key(|storage| storage.total_bytes)
-        .ok_or("the server returned no storage details")?;
     println!(
         "Selected {} ({} bytes total)",
-        storage.root_path, storage.total_bytes
+        wft.storages().root_path(),
+        wft.storages().total_bytes()
     );
 
-    let directory_path = format!("{}/DCIM", storage.root_path.trim_end_matches('/'));
+    let directory_path = format!("{}/DCIM", wft.storages().root_path().trim_end_matches('/'));
     let directory = wft.directory(&directory_path).await?;
     for file in directory.files {
         let download = wft.download_file(&file.path).await?;
@@ -60,7 +55,10 @@ pass an absolute Android storage path. The WFT API route is formed by appending 
 `download_file` returns a `DownloadedFile` containing the downloaded `bytes` and request `elapsed`
 time.
 
-`Wft::new` takes a `SocketAddr`, pings `/api/ping`, and returns an error if the server is
-unreachable or does not reply with `pong`; specify the server port explicitly if it is not `1234`.
-Methods return `wft::Result<T>` and report network errors, HTTP failures, API error payloads,
-invalid paths, and malformed JSON through `wft::Error`.
+`Wft::new` takes a `SocketAddr`, pings `/api/ping`, and fetches storage details for
+`wft.storages()`. Its default selected root is the one with the greatest total capacity; call
+`wft.storages().select(root_path)` to get a copy with another reported root selected. Construction
+returns an error if the server is unreachable, does not reply with `pong`, or reports no storage
+entries; specify the server port explicitly if it is not `1234`. Methods return `wft::Result<T>`
+and report network errors, HTTP failures, API error payloads, invalid paths, and malformed JSON
+through `wft::Error`.

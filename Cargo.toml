@@ -1,6 +1,6 @@
 [package]
 name = "fast-sync"
-version = "0.0.2"
+version = "0.0.3"
 edition = "2024"
 description = "A client for the WiFi File Transfer HTTP protocol"
 homepage = "https://github.com/Gordon01/fast-sync"
