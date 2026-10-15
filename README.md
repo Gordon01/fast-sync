@@ -13,11 +13,15 @@ the requested remote directory, the program:
 2. Creates the corresponding directory under the local output root.
 3. Checks each listed file against the local file with the same name:
    - Missing locally: download it.
-   - Same size: leave it unchanged.
-   - Different size: download it and overwrite the local file.
+   - Same size and modification time: leave it unchanged.
+   - Different size or modification time: download it and overwrite the local file.
 4. Reports transfer progress and timing in the log.
 
-The comparison uses file size only; modification times and file contents are not checked. It processes files directly in the requested directory, does not recurse into child directories, and does not remove local files that are absent from the remote listing.
+The server's `modified` value is interpreted as Unix-epoch milliseconds and preserved on downloaded
+files so later runs can compare timestamps exactly. The WFT protocol does not specify the units or
+semantics of this value. File contents are not compared. The command processes files directly in
+the requested directory, does not recurse into child directories, and does not remove local files
+that are absent from the remote listing.
 
 ## Example
 
@@ -34,7 +38,7 @@ Before running, the local output could look like this:
 ```text
 out/
 └── Pictures/
-    ├── photo-a.jpg    # 4096 bytes: same size as remote
+    ├── photo-a.jpg    # 4096 bytes: same size and modification time as remote
     ├── photo-b.jpg    # 1500 bytes: different size
     └── notes.txt      # local-only file
 ```

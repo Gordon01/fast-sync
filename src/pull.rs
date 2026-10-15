@@ -2,7 +2,8 @@ use std::path::PathBuf;
 
 use anyhow::Context;
 use clap::Args;
-use fast_sync::wft::{Directory, Wft};
+use fast_sync::wft::{DirectoryEntry, FileStatus, Wft};
+use filetime::FileTime;
 use readable::{byte::Byte, up::Uptime};
 use tracing::{debug, info};
 
@@ -23,75 +24,87 @@ pub struct PullArgs {
     output: PathBuf,
 }
 
-#[derive(Debug)]
-enum FileStatus {
-    Missing,
-    UpToDate,
-    Outdated,
-}
-
 pub async fn run(wft: &mut Wft, args: &PullArgs) -> anyhow::Result<()> {
-    let mut storages = wft.storages().clone();
     if let Some(root_path) = args.storage.as_deref() {
-        storages.select(root_path)?;
+        wft.storages().select(root_path)?;
     }
-    let selected_root = storages.root_path();
+    let selected_root = wft.storages().root_path().to_owned();
+    let total_bytes = wft.storages().total_bytes();
 
     info!(
         "Selected storage {} ({} total bytes)",
-        selected_root,
-        storages.total_bytes()
+        selected_root, total_bytes
     );
 
     validate_directory(&args.directory)?;
-    let remote_directory = if args.directory.is_empty() {
-        selected_root.to_owned()
-    } else {
-        format!("{}/{}", selected_root.trim_end_matches('/'), args.directory)
-    };
-    let directory = wft.directory(&remote_directory).await?;
+    let entries = wft.directory(&args.directory).await?;
 
-    process_files(args, &remote_directory, &directory, wft).await
+    process_files(args, entries.into_entries(), wft).await
 }
 
-/// Downloads files that are missing or newer/changed on the remote endpoint.
+/// Downloads files that are missing or differ in size or modification time.
 async fn process_files(
     args: &PullArgs,
-    remote_directory: &str,
-    directory: &Directory,
+    entries: impl Iterator<Item = DirectoryEntry>,
     wft: &Wft,
 ) -> anyhow::Result<()> {
     let out_dir = args.output.join(&args.directory);
     std::fs::create_dir_all(&out_dir)?;
 
-    let total_bytes: u64 = directory.files.iter().map(|e| e.size).sum();
+    let mut files = Vec::new();
+    for entry in entries {
+        let DirectoryEntry::File(file) = entry else {
+            continue;
+        };
+        let out_file = out_dir.join(&file.name);
+        let status = match file.compare_local_file(&out_file) {
+            FileStatus::MetadataError(error) | FileStatus::ModifiedTimeError(error) => {
+                return Err(error).with_context(|| format!("Failed to inspect {:?}", out_file));
+            }
+            status => status,
+        };
+        files.push((file, out_file, status));
+    }
+
+    let total_bytes: u64 = files
+        .iter()
+        .filter(|(_, _, status)| !matches!(status, FileStatus::UpToDate))
+        .map(|(file, _, _)| file.size)
+        .sum();
     let mut stats = TransferStats::new(total_bytes);
 
-    for file in &directory.files {
-        let out_file = out_dir.join(&file.name);
-        let status = file_status(&out_file, file.size, file.modified);
-
+    for (file, out_file, status) in files {
         debug!(
             "Checking {}: status = {status:?}, size = {}, ETA = {}",
             out_file.display(),
             Byte::from(file.size),
             Uptime::from(file.size / stats.speed().max(1))
         );
-        if let FileStatus::UpToDate = status {
-            continue;
+        match status {
+            FileStatus::UpToDate => continue,
+            FileStatus::Missing | FileStatus::DifferentTimestamp => {}
+            FileStatus::MetadataError(error) | FileStatus::ModifiedTimeError(error) => {
+                return Err(error).with_context(|| format!("Failed to inspect {:?}", out_file));
+            }
         }
 
-        let out_path = format!("{}/{}", remote_directory.trim_end_matches('/'), file.name);
-        let download = wft.download_file(&out_path).await?;
+        let modified = remote_mtime(file.modified)?;
+        let download = wft.download_file(&file.path).await?;
         std::fs::write(&out_file, &download.bytes)
             .with_context(|| format!("Failed to write output file {:?}", out_file))?;
+        filetime::set_file_mtime(&out_file, modified)
+            .with_context(|| format!("Failed to set modification time for {:?}", out_file))?;
         stats.update(download.bytes.len() as u64);
 
         info!(
             "Bytes left: {}, {}/s, {:.2}% ETA: {}, done: {} in {}",
             Byte::from(stats.left()),
             Byte::from(stats.speed()),
-            stats.progress() * 100.0,
+            if stats.total_bytes == 0 {
+                100.0
+            } else {
+                stats.progress() * 100.0
+            },
             if let Some(eta) = stats.eta() {
                 Uptime::from(eta).to_string()
             } else {
@@ -123,17 +136,9 @@ fn validate_directory(directory: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Compares the local file with the remote listing to decide whether it should be synced.
-fn file_status(out_file: &PathBuf, remote_size: u64, _remote_mtime: u64) -> FileStatus {
-    match std::fs::metadata(out_file) {
-        Ok(metadata) => {
-            let local_size = metadata.len();
-            if local_size == remote_size {
-                FileStatus::UpToDate
-            } else {
-                FileStatus::Outdated
-            }
-        }
-        Err(_) => FileStatus::Missing,
-    }
+fn remote_mtime(modified_millis: u64) -> anyhow::Result<FileTime> {
+    let seconds = i64::try_from(modified_millis / 1_000)
+        .context("Remote modification time is outside the supported timestamp range")?;
+    let nanoseconds = ((modified_millis % 1_000) * 1_000_000) as u32;
+    Ok(FileTime::from_unix_time(seconds, nanoseconds))
 }

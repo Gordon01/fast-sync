@@ -385,6 +385,7 @@ version = "0.0.3"
 dependencies = [
  "anyhow",
  "clap",
+ "filetime",
  "readable",
  "reqwest",
  "serde",
@@ -393,6 +394,16 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "filetime"
+version = "0.2.29"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c287a33c7f0a620c38e641e7f60827713987b3c0f26e8ddc9462cc69cf75759"
+dependencies = [
+ "cfg-if",
+ "libc",
 ]
 
 [[package]]

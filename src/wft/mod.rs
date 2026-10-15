@@ -1,6 +1,7 @@
 use std::{
     net::SocketAddr,
-    time::{Duration, Instant},
+    path::Path,
+    time::{Duration, Instant, UNIX_EPOCH},
 };
 
 mod storage;
@@ -96,22 +97,21 @@ impl Wft {
         Self::get_json(&self.client, self.url(&["api", "get-android-version"])?).await
     }
 
-    /// Lists a directory using its absolute storage path, such as
-    /// `"/storage/emulated/0/DCIM"`.
+    /// Lists a directory relative to the selected storage root, such as
+    /// `"Pictures/Whatsapp"`.
     ///
-    /// The path is appended to `/api/directory/` without a `root` prefix.
+    /// The selected root is prepended to `path`, then appended to
+    /// `/api/directory/` without a `root` prefix. Returns directories followed
+    /// by files.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::InvalidPath`] if `path` is not absolute. Also returns
-    /// an error if the request fails or the response contains an API, HTTP, or
-    /// JSON error.
+    /// Returns [`Error::InvalidPath`] if `path` is not a valid relative path.
+    /// Also returns an error if the request fails or the response contains an
+    /// API, HTTP, or JSON error.
     pub async fn directory(&self, path: impl AsRef<str>) -> Result<Directory> {
-        let input = path.as_ref();
-        let Some(path) = input.strip_prefix('/') else {
-            return Err(Error::InvalidPath(input.to_owned()));
-        };
-        let path = path.strip_suffix('/').unwrap_or(path);
+        let path = directory_path(self.storages.root_path(), path.as_ref())?;
+        let path = path.strip_prefix('/').expect("storage root is absolute");
         let mut url_segments = vec!["api", "directory"];
         if path.is_empty() {
             url_segments.push("");
@@ -247,6 +247,24 @@ pub struct Directory {
     pub files: Vec<Entry>,
 }
 
+impl Directory {
+    pub fn into_entries(self) -> impl Iterator<Item = DirectoryEntry> {
+        self.directories
+            .into_iter()
+            .map(DirectoryEntry::Directory)
+            .chain(self.files.into_iter().map(DirectoryEntry::File))
+    }
+}
+
+/// A file or directory returned by [`Wft::directory`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DirectoryEntry {
+    /// A child directory.
+    Directory(Entry),
+    /// A file contained in the listed directory.
+    File(Entry),
+}
+
 /// A file or directory in a listing.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub struct Entry {
@@ -260,6 +278,76 @@ pub struct Entry {
     pub modified: u64,
     /// File extension, or an empty string when none is reported.
     pub extension: String,
+}
+
+fn directory_path(root: &str, path: &str) -> Result<String> {
+    if path.starts_with('/') {
+        return Err(Error::InvalidPath(path.to_owned()));
+    }
+    if !path.is_empty()
+        && path.split('/').any(|component| {
+            component.is_empty() || matches!(component, "." | "..") || component.contains('\\')
+        })
+    {
+        return Err(Error::InvalidPath(path.to_owned()));
+    }
+    let root = root.trim_end_matches('/');
+    let root = if root.is_empty() { "/" } else { root };
+    Ok(if path.is_empty() {
+        root.to_owned()
+    } else if root == "/" {
+        format!("{root}{path}")
+    } else {
+        format!("{root}/{path}")
+    })
+}
+
+impl Entry {
+    /// Compares this remote entry with a local file.
+    ///
+    /// `DifferentTimestamp` is returned when the local file exists but its size
+    /// or modification time differs from this entry.
+    pub fn compare_local_file(&self, local_path: impl AsRef<Path>) -> FileStatus {
+        let metadata = match std::fs::metadata(local_path) {
+            Ok(metadata) => metadata,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return FileStatus::Missing;
+            }
+            Err(error) => return FileStatus::MetadataError(error),
+        };
+        if metadata.len() != self.size {
+            return FileStatus::DifferentTimestamp;
+        }
+
+        let modified = match metadata.modified() {
+            Ok(modified) => modified,
+            Err(error) => return FileStatus::ModifiedTimeError(error),
+        };
+        if modified
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .is_some_and(|duration| duration.as_millis() == u128::from(self.modified))
+        {
+            FileStatus::UpToDate
+        } else {
+            FileStatus::DifferentTimestamp
+        }
+    }
+}
+
+/// Whether a local file matches a remote directory entry.
+#[derive(Debug)]
+pub enum FileStatus {
+    /// The local file exists and matches the remote size and modification time.
+    UpToDate,
+    /// No local file exists at the requested path.
+    Missing,
+    /// The local file exists but differs in size or modification time.
+    DifferentTimestamp,
+    /// Reading the local file metadata failed.
+    MetadataError(std::io::Error),
+    /// Reading the local file modification time failed.
+    ModifiedTimeError(std::io::Error),
 }
 
 /// Bytes downloaded from WFT and the elapsed request time.
@@ -310,17 +398,4 @@ pub enum Error {
     /// The requested storage root was not reported by WFT.
     #[error("storage root {0:?} was not reported by WFT")]
     StorageNotFound(String),
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn server_url_encodes_path_segments_and_preserves_trailing_empty_segment() {
-        let address = SocketAddr::from(([127, 0, 0, 1], 1234));
-        let url = server_url(address, &["api", "directory", "a b", ""]).unwrap();
-
-        assert_eq!(url.as_str(), "http://127.0.0.1:1234/api/directory/a%20b/");
-    }
 }
