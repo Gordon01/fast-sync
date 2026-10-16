@@ -16,10 +16,13 @@ Change this value and rebuild to use another device. Before connecting, make
 sure the WFT app is running on the Android device, its HTTP server is enabled,
 and the computer can reach the configured address and port.
 
-Initialization sets up logging and the runtime without contacting any device.
+Every command acquires the shared plugin, lazily initializing logging and the
+runtime without contacting any device. Explicit host initialization uses the
+same path; subsequent commands reuse the plugin.
+Plugin initialization failures are cached until the plugin is reloaded.
 The plugin connects on the first device operation and caches successful
 connections by IP address and port. Each device uses its own storage root with
-the greatest reported capacity. Failed connections are reported and can be
+the greatest reported capacity. Failed device connections are reported and can be
 retried.
 
 The plugin root is displayed as `TotalDroid` in Double Commander and contains
