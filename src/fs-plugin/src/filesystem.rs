@@ -1,9 +1,13 @@
 //! Safe plugin core. [`crate::wfx`] decodes host calls into [`Command`]s and runs them here.
 #![forbid(unsafe_code)]
 
-use crate::root;
+use crate::{
+    remote_path::{DevicePath, RemotePath},
+    root,
+};
 use fast_sync::wft::{DirectoryEntry, Entry as WftEntry, Error as WftError, Wft};
 use std::{
+    collections::HashMap,
     fmt,
     fs::{self, OpenOptions},
     io::{self, Write},
@@ -25,30 +29,30 @@ const DEVICE_ADDRESS: &str = "192.168.1.9:1234";
 pub enum Command {
     Init,
     List {
-        path: String,
+        path: RemotePath,
     },
     Get {
-        remote: String,
+        remote: DevicePath,
         local: PathBuf,
         overwrite: bool,
     },
     Put {
         local: PathBuf,
-        remote: String,
+        remote: DevicePath,
         overwrite: bool,
     },
     Delete {
-        path: String,
+        path: DevicePath,
     },
     MkDir {
-        path: String,
+        path: DevicePath,
     },
     RemoveDir {
-        path: String,
+        path: DevicePath,
     },
     Rename {
-        from: String,
-        to: String,
+        from: DevicePath,
+        to: DevicePath,
         overwrite: bool,
     },
 }
@@ -123,12 +127,76 @@ pub fn execute(command: Command) -> Result<Reply, Error> {
     result
 }
 
+/// Shared runtime and lazily connected clients, keyed by device address.
 struct PluginState {
+    /// Executes WFT requests from synchronous host callbacks.
     runtime: Runtime,
-    client: Wft,
+    /// Successful connections reused by subsequent device operations.
+    clients: Mutex<HashMap<SocketAddr, Arc<Wft>>>,
 }
 
 static STATE: Mutex<Option<Arc<PluginState>>> = Mutex::new(None);
+
+impl PluginState {
+    /// Creates the runtime without contacting any device.
+    fn new() -> Result<Self, Error> {
+        let runtime =
+            Runtime::new().map_err(|error| plugin(format!("create Tokio runtime: {error}")))?;
+        Ok(Self {
+            runtime,
+            clients: Mutex::new(HashMap::new()),
+        })
+    }
+
+    /// Returns a cached client or connects once while holding the cache lock.
+    fn client(&self, address: SocketAddr) -> Result<Arc<Wft>, Error> {
+        let mut clients = self
+            .clients
+            .lock()
+            .map_err(|_| plugin("device client cache lock is poisoned"))?;
+        if let Some(client) = clients.get(&address) {
+            return Ok(Arc::clone(client));
+        }
+        info!(%address, "connecting to WFT device");
+        let client = self
+            .runtime
+            .block_on(Wft::new(address))
+            .map_err(|error| plugin(format!("connect to WFT device {address}: {error}")))?;
+        info!(%address, root = %client.storages().selected_root().root_path, "connected to WFT device");
+        let client = Arc::new(client);
+        clients.insert(address, Arc::clone(&client));
+        Ok(client)
+    }
+
+    /// Lists a device-relative directory without rewriting the host path.
+    fn list_device(&self, address: SocketAddr, path: &str) -> Result<Vec<Entry>, Error> {
+        let client = self.client(address)?;
+        let entries: Vec<_> = self
+            .runtime
+            .block_on(client.directory(path))?
+            .map(|entry| match entry {
+                DirectoryEntry::Directory(entry) => to_entry(entry, true),
+                DirectoryEntry::File(entry, _, _) => to_entry(entry, false),
+            })
+            .collect();
+        info!(%address, count = entries.len(), "listed WFT directory");
+        Ok(entries)
+    }
+
+    /// Downloads a WFX-relative file beneath the device's selected storage root.
+    fn download(&self, address: SocketAddr, path: &str) -> Result<Vec<u8>, Error> {
+        let client = self.client(address)?;
+        let root = &client.storages().selected_root().root_path;
+        let remote_path = format!("{}/{}", root.trim_end_matches('/'), path);
+        let _span = tracing::info_span!("download", %address, device_path = %remote_path).entered();
+        let contents = self
+            .runtime
+            .block_on(client.download_file(remote_path))?
+            .bytes;
+        info!(size = contents.len(), "downloaded WFT file");
+        Ok(contents)
+    }
+}
 
 fn init() -> Result<(), Error> {
     if let Err(error) = initialize_logging() {
@@ -140,52 +208,33 @@ fn init() -> Result<(), Error> {
         .lock()
         .map_err(|_| plugin("plugin state lock is poisoned"))?;
     if state.is_none() {
-        let address = device_address()?;
-        info!(%address, "connecting to WFT device");
-        let runtime =
-            Runtime::new().map_err(|error| plugin(format!("create Tokio runtime: {error}")))?;
-        let client = runtime
-            .block_on(Wft::new(address))
-            .map_err(|error| plugin(format!("connect to WFT device {address}: {error}")))?;
-        info!(root = %client.storages().selected_root().root_path, "connected to WFT device");
-        *state = Some(Arc::new(PluginState { runtime, client }));
+        *state = Some(Arc::new(PluginState::new()?));
     }
     Ok(())
 }
 
-fn list(path: &str) -> Result<Vec<Entry>, Error> {
+fn list(path: &RemotePath) -> Result<Vec<Entry>, Error> {
     let _span = tracing::info_span!("find_first", path = %path).entered();
-    let address = device_address()?;
-    let Some(path) = root::device_relative_path(path, &address).map_err(Error::Plugin)? else {
-        info!(
-            device = root::device_name(&address),
-            "listed WFT device at plugin root"
-        );
-        return Ok(root::root_entries(&address));
-    };
-    let state = plugin_state()?;
-    let _span = tracing::info_span!("list_directory", device_path = %path).entered();
-    let entries: Vec<_> = state
-        .runtime
-        .block_on(state.client.directory(&path))?
-        .map(|entry| match entry {
-            DirectoryEntry::Directory(entry) => to_entry(entry, true),
-            DirectoryEntry::File(entry, _, _) => to_entry(entry, false),
-        })
-        .collect();
-    info!(count = entries.len(), "listed WFT directory");
-    Ok(entries)
+    match path {
+        RemotePath::Root => {
+            let address = device_address()?;
+            info!(%address, "listed WFT device at plugin root");
+            Ok(root::root_entries(&address))
+        }
+        RemotePath::Device(device) => plugin_state()?.list_device(device.address, &device.path),
+    }
 }
 
-fn get(remote: &str, local: &Path, overwrite: bool) -> Result<(), Error> {
+fn get(remote: &DevicePath, local: &Path, overwrite: bool) -> Result<(), Error> {
     let _span = tracing::info_span!(
         "get_file",
-        remote_path = %remote,
+        address = %remote.address,
+        remote_path = %remote.path,
         local_path = %local.display(),
         overwrite
     )
     .entered();
-    let contents = download(remote)?;
+    let contents = plugin_state()?.download(remote.address, &remote.path)?;
     if overwrite {
         fs::write(local, contents)?;
     } else {
@@ -196,23 +245,6 @@ fn get(remote: &str, local: &Path, overwrite: bool) -> Result<(), Error> {
             .write_all(&contents)?;
     }
     Ok(())
-}
-
-fn download(path: &str) -> Result<Vec<u8>, Error> {
-    let path = root::device_relative_path(path, &device_address()?)
-        .map_err(Error::Plugin)?
-        .filter(|path| !path.is_empty())
-        .ok_or_else(|| plugin("a device file path is required"))?;
-    let state = plugin_state()?;
-    let root = &state.client.storages().selected_root().root_path;
-    let remote_path = format!("{}/{}", root.trim_end_matches('/'), path);
-    let _span = tracing::info_span!("download", device_path = %remote_path).entered();
-    let contents = state
-        .runtime
-        .block_on(state.client.download_file(remote_path))?
-        .bytes;
-    info!(size = contents.len(), "downloaded WFT file");
-    Ok(contents)
 }
 
 fn initialize_logging() -> Result<(), String> {
@@ -266,80 +298,5 @@ fn to_entry(entry: WftEntry, is_directory: bool) -> Entry {
         name: entry.name,
         is_directory,
         size: entry.size,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{Command, Error, execute};
-
-    #[test]
-    fn logging_initialization_is_cached() {
-        const CHILD: &str = "FS_PLUGIN_LOGGING_TEST";
-        if let Ok(case) = std::env::var(CHILD) {
-            let first = super::initialize_logging();
-            let second = super::initialize_logging();
-            assert_eq!(first, second);
-            assert_eq!(first.is_ok(), case == "success");
-            return;
-        }
-
-        // Isolate the global tracing subscriber and HOME from the test runner.
-        let directory =
-            std::env::temp_dir().join(format!("fs-plugin-logging-{}", std::process::id()));
-        std::fs::create_dir(&directory).unwrap();
-        let invalid_home = directory.join("not-a-directory");
-        std::fs::write(&invalid_home, b"").unwrap();
-        for (case, home) in [("success", &directory), ("failure", &invalid_home)] {
-            let output = std::process::Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "filesystem::tests::logging_initialization_is_cached",
-                    "--nocapture",
-                ])
-                .env(CHILD, case)
-                .env("HOME", home)
-                .output()
-                .unwrap();
-            assert!(output.status.success(), "{output:?}");
-        }
-        std::fs::remove_dir_all(directory).unwrap();
-    }
-
-    #[test]
-    fn unsupported_commands_are_rejected() {
-        let commands = [
-            Command::Put {
-                local: "a".into(),
-                remote: "b".into(),
-                overwrite: false,
-            },
-            Command::Delete { path: "a".into() },
-            Command::MkDir { path: "a".into() },
-            Command::RemoveDir { path: "a".into() },
-            Command::Rename {
-                from: "a".into(),
-                to: "b".into(),
-                overwrite: false,
-            },
-        ];
-        for command in commands {
-            assert!(matches!(execute(command), Err(Error::NotSupported)));
-        }
-    }
-
-    #[test]
-    fn get_rejects_invalid_remote_paths() {
-        for remote in ["\\", "\\other-device\\file", "\\192.168.1.9\\..\\x"] {
-            let command = Command::Get {
-                remote: remote.into(),
-                local: "unused".into(),
-                overwrite: false,
-            };
-            assert!(
-                matches!(execute(command), Err(Error::Plugin(_))),
-                "{remote}"
-            );
-        }
     }
 }

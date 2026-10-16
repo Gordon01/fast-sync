@@ -7,6 +7,7 @@
 //! [`filesystem::execute`] and encodes the result back into the ABI.
 
 use crate::filesystem::{self, Command, Entry, Error, Reply};
+use crate::remote_path::{DevicePath, RemotePath};
 use std::ffi::{CStr, c_char, c_void};
 use std::path::PathBuf;
 use widestring::U16CStr;
@@ -133,6 +134,13 @@ unsafe fn find_first<C>(
         tracing::error!("null WFX listing path or output buffer");
         return INVALID_HANDLE_VALUE;
     };
+    let path = match path.parse::<RemotePath>() {
+        Ok(path) => path,
+        Err(error) => {
+            tracing::error!(%error, "invalid WFX listing path");
+            return INVALID_HANDLE_VALUE;
+        }
+    };
     let mut entries = match filesystem::execute(Command::List { path }) {
         Ok(Reply::Entries(entries)) => entries.into_iter(),
         Ok(Reply::Done) => {
@@ -171,7 +179,15 @@ unsafe fn find_next<C>(
 
 fn get_file(remote: Option<String>, local: Option<String>, copy_flags: i32) -> i32 {
     let (Some(remote), Some(local)) = (remote, local) else {
+        tracing::error!("null WFX remote or local download path");
         return FS_FILE_NOTFOUND;
+    };
+    let remote = match DevicePath::parse_file(&remote) {
+        Ok(remote) => remote,
+        Err(error) => {
+            tracing::error!(%error, "invalid WFX download path");
+            return FS_FILE_NOTFOUND;
+        }
     };
     let overwrite = copy_flags & FS_COPYFLAGS_OVERWRITE != 0;
     let local = PathBuf::from(local);
