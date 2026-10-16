@@ -1,69 +1,12 @@
 # fast-sync
 
-`fast-sync` downloads files from the HTTP server provided by the [WiFi File Transfer Android app](https://play.google.com/store/apps/details?id=com.techprd.filetransfer). It is useful for copying files from a phone to a computer over the local network without selecting and downloading each file individually.
+`fast-sync` copies files from the [WiFi File Transfer Android app](https://play.google.com/store/apps/details?id=com.techprd.filetransfer) to your computer over Wi-Fi.
 
-## How synchronization works
+## Sync files
 
-The program selects the storage root with the largest reported total capacity by default; use
-`--storage` to choose another storage root.
-The `--directory` argument identifies a directory within that root (default: `DCIM/Camera`). For
-the requested remote directory, the program:
+`pull` downloads missing or changed files from one device directory. Files with matching size and modification time are skipped. For example, syncing `Pictures` updates `out/Pictures`: changed files are replaced, new files are added, and local-only files are left alone.
 
-1. Requests the directory listing from the device.
-2. Creates the corresponding directory under the local output root.
-3. Checks each listed file against the local file with the same name:
-   - Missing locally: download it.
-   - Same size and modification time: leave it unchanged.
-   - Different size or modification time: download it and overwrite the local file.
-4. Displays byte-based transfer progress in a progress bar and reports per-file timing in the log.
-
-The server's `modified` value is interpreted as Unix-epoch milliseconds and preserved on downloaded
-files so later runs can compare timestamps exactly. The WFT protocol does not specify the units or
-semantics of this value. File contents are not compared. The command processes files directly in
-the requested directory, does not recurse into child directories, and does not remove local files
-that are absent from the remote listing.
-
-## Example
-
-Suppose the selected storage has a `Pictures` directory containing:
-
-```text
-photo-a.jpg  4096 bytes
-photo-b.jpg  2048 bytes
-photo-c.jpg  1024 bytes
-```
-
-Before running, the local output could look like this:
-
-```text
-out/
-└── Pictures/
-    ├── photo-a.jpg    # 4096 bytes: same size and modification time as remote
-    ├── photo-b.jpg    # 1500 bytes: different size
-    └── notes.txt      # local-only file
-```
-
-Run the `pull` subcommand for the `Pictures` directory within the selected storage:
-
-```sh
-fast-sync --ip 192.168.1.111 pull --directory Pictures
-```
-
-After a successful run:
-
-```text
-out/
-└── Pictures/
-    ├── photo-a.jpg    # left unchanged
-    ├── photo-b.jpg    # downloaded and replaced (2048 bytes)
-    ├── photo-c.jpg    # downloaded (1024 bytes)
-    └── notes.txt      # left untouched
-```
-
-## Usage
-
-The server port defaults to `1234`, the directory within the selected storage to `DCIM/Camera`,
-the storage root with the largest reported total capacity, and the local output root to `out`.
+The default storage is the one with the largest reported capacity. Defaults are port `1234`, directory `DCIM/Camera`, and output directory `out`. Sync does not recurse into subdirectories or delete local files.
 
 ```sh
 fast-sync --ip 192.168.1.111 pull
@@ -71,24 +14,17 @@ fast-sync --ip 192.168.1.111 pull --storage /storage/ABCD-1234 --directory Pictu
 fast-sync --ip 192.168.1.111 storage-info
 ```
 
-Use `pull` to download from a directory. `storage-info` displays the media sizes and total/available
-space reported by the server. These are server-provided summaries; the command does not recursively
-scan directories.
+`storage-info` shows storage and media sizes reported by the server.
 
-Build or run with Nix:
+## Build and run
+
+With Nix:
 
 ```sh
 nix build .#fast-sync
 nix run .#fast-sync -- --ip 192.168.1.111 pull --directory Pictures
 ```
 
-For local development, install [Nix](https://nixos.org/) and [direnv](https://direnv.net/), then allow the project environment:
+For local development, install [Nix](https://nixos.org/) and [direnv](https://direnv.net/), then run `direnv allow` and `cargo run -- --ip 192.168.1.111 pull`.
 
-```sh
-direnv allow
-cargo run -- --ip 192.168.1.111 pull --directory Pictures
-```
-
-The Nix development shell provides Cargo, rustfmt, Clippy, and Rust standard-library sources for rust-analyzer.
-
-The reusable Rust API is documented in [`src/fast_sync/src/wft/README.md`](src/fast_sync/src/wft/README.md).
+The Rust API is documented in [`src/fast_sync/src/wft/README.md`](src/fast_sync/src/wft/README.md).

@@ -2,3 +2,7 @@
 name = "fs_plugin"
 version = "0.0.3"
 edition = "2024"
+description = "A read-only Double Commander WFX filesystem plugin"
+
+[lib]
+crate-type = ["cdylib"]

@@ -5,9 +5,17 @@
     let
       fast-sync = pkgs.rustPlatform.buildRustPackage {
         pname = "fast-sync";
-        version = (fromTOML (builtins.readFile ../src/fast-sync/Cargo.toml)).package.version;
-        src = ../.;
-        cargoLock.lockFile = ../Cargo.lock;
+        version = (fromTOML (builtins.readFile ./Cargo.toml)).package.version;
+        src = ../..;
+        cargoLock.lockFile = ../../Cargo.lock;
+        cargoBuildFlags = [
+          "-p"
+          "fast-sync"
+        ];
+        cargoTestFlags = [
+          "-p"
+          "fast-sync"
+        ];
 
         meta = {
           description = "A client for the WiFi File Transfer HTTP protocol";
@@ -20,19 +28,6 @@
       packages = {
         default = fast-sync;
         inherit fast-sync;
-      };
-
-      devShells.default = pkgs.mkShell {
-        packages = with pkgs; [
-          clippy
-          rustfmt
-        ];
-
-        inputsFrom = [
-          fast-sync
-        ];
-
-        RUST_SRC_PATH = "${pkgs.rust.packages.stable.rustPlatform.rustLibSrc}";
       };
     };
 }
