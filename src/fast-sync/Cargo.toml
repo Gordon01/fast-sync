@@ -14,7 +14,11 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 indicatif = "0.18.6"
 readable = "0.16"
-reqwest = { version = "0.13", default-features = false, features = ["charset", "http2", "rustls"] }
+reqwest = { version = "0.13", default-features = false, features = [
+  "charset",
+  "http2",
+  "rustls",
+] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
