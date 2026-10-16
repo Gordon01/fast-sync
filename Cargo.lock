@@ -444,6 +444,12 @@ checksum = "42703706b716c37f96a77aea830392ad231f44c9e9a67872fa5548707e11b11c"
 [[package]]
 name = "fs_plugin"
 version = "0.0.3"
+dependencies = [
+ "fast-sync",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
 
 [[package]]
 name = "futures-channel"

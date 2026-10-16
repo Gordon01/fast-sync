@@ -23,7 +23,7 @@
             mkdir -p "$out/lib"
             install -m 755 \
               "target/${pkgs.stdenv.hostPlatform.rust.rustcTarget}/release/libfs_plugin.dylib" \
-              "$out/lib/TotalDroid.WFX"
+              "$out/TotalDroid.WFX"
             runHook postInstall
           '';
 

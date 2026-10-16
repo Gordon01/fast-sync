@@ -6,3 +6,9 @@ description = "A read-only Double Commander WFX filesystem plugin"
 
 [lib]
 crate-type = ["cdylib"]
+
+[dependencies]
+fast-sync = { path = "../fast-sync" }
+tokio = { version = "1", features = ["rt-multi-thread"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["fmt"] }

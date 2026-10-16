@@ -37,11 +37,11 @@ impl Wft {
         debug!(%address, "Pinging WFT server");
         let client = reqwest::Client::builder().build()?;
         let url = server_url(address, &["api", "ping"])?;
-        let response = client.get(url).send().await?;
+        let response = client.get(url.clone()).send().await?;
         let status = response.status();
         let body = response.bytes().await?;
         if !status.is_success() {
-            return Err(http_status_error(status, &body));
+            return Err(http_status_error(&url, status, &body));
         }
         let body = String::from_utf8_lossy(&body);
         if body.trim() != "pong" {
@@ -62,8 +62,7 @@ impl Wft {
         })
     }
 
-    /// Sets the local output root used to compare files returned by
-    /// [`Wft::directory`].
+    /// Sets the local output root.
     pub fn set_output_path(&mut self, path: impl Into<PathBuf>) -> std::io::Result<()> {
         self.output_path = path.into();
         std::fs::create_dir_all(&self.output_path)
@@ -121,55 +120,30 @@ impl Wft {
     }
 
     /// Lists a directory relative to the storage root, such as
-    /// `"Pictures/Whatsapp"`.
+    /// `"Pictures/Whatsapp"`, and compares its files with the corresponding
+    /// local output paths.
     pub async fn directory(&self, path: impl AsRef<str>) -> Result<DirectoryIterator> {
-        fn directory_path(root: &str, path: &str) -> Result<String> {
-            if path.starts_with('/') {
-                return Err(Error::InvalidPath(path.to_owned()));
-            }
-            if !path.is_empty()
-                && path.split('/').any(|component| {
-                    component.is_empty()
-                        || matches!(component, "." | "..")
-                        || component.contains('\\')
-                })
-            {
-                return Err(Error::InvalidPath(path.to_owned()));
-            }
-            let root = root.trim_end_matches('/');
-            if path.is_empty() {
-                return Ok(if root.is_empty() {
-                    "/".to_owned()
-                } else {
-                    root.to_owned()
-                });
-            }
-            Ok(format!("{root}/{path}"))
-        }
-
         let relative_path = path.as_ref();
-        let path = directory_path(&self.storages.selected_root().root_path, relative_path)?;
-        let path = path.strip_prefix('/').expect("storage root is absolute");
-        let mut url_segments = vec!["api", "directory"];
-        if path.is_empty() {
-            url_segments.push("");
-        } else {
-            url_segments.extend(path.split('/'));
+        let root = &self.storages.selected_root().root_path;
+        let mut segments = vec!["api", "directory"];
+        segments.extend(
+            root.split('/')
+                .chain(relative_path.split('/'))
+                .filter(|segment| !segment.is_empty()),
+        );
+        if segments.len() == 2 {
+            segments.push("");
         }
-        let url = self.url(&url_segments)?;
+        let url = self.url(&segments)?;
         let directory: Directory = Self::get_json(&self.client, url.clone()).await?;
         info!(
             url = %url,
-            path,
+            path = %relative_path,
             "got {} dirs, {} files",
             directory.directories.len(),
             directory.files.len(),
         );
         let local_directory = self.output_path.join(relative_path);
-        std::fs::create_dir_all(&local_directory).map_err(|source| Error::OutputDirectory {
-            path: local_directory.clone(),
-            source,
-        })?;
         Ok(directory.iter(local_directory))
     }
 
@@ -198,7 +172,7 @@ impl Wft {
             return Err(Error::Api(error.error));
         }
         if !status.is_success() {
-            return Err(http_status_error(status, &bytes));
+            return Err(http_status_error(&url, status, &bytes));
         }
 
         trace!(
@@ -213,11 +187,8 @@ impl Wft {
         })
     }
 
-    async fn get_json<T: DeserializeOwned>(
-        client: &reqwest::Client,
-        url: impl reqwest::IntoUrl,
-    ) -> Result<T> {
-        let response = client.get(url).send().await?;
+    async fn get_json<T: DeserializeOwned>(client: &reqwest::Client, url: Url) -> Result<T> {
+        let response = client.get(url.clone()).send().await?;
         let status = response.status();
         let body = response.bytes().await?;
 
@@ -225,7 +196,7 @@ impl Wft {
             return Err(Error::Api(error.error));
         }
         if !status.is_success() {
-            return Err(http_status_error(status, &body));
+            return Err(http_status_error(&url, status, &body));
         }
 
         Ok(serde_json::from_slice(&body)?)
@@ -246,8 +217,9 @@ fn server_url(address: SocketAddr, path_segments: &[&str]) -> Result<Url> {
     Ok(url)
 }
 
-fn http_status_error(status: StatusCode, body: &[u8]) -> Error {
+fn http_status_error(url: &Url, status: StatusCode, body: &[u8]) -> Error {
     Error::HttpStatus {
+        url: url.to_string(),
         status: status.as_u16(),
         body: String::from_utf8_lossy(body).into_owned(),
     }
@@ -304,11 +276,12 @@ pub enum Error {
     #[error("WFT API error: {0}")]
     Api(String),
     /// The server returned a non-success HTTP status.
-    #[error("HTTP request failed with status {status}: {body}")]
-    HttpStatus { status: u16, body: String },
-    /// A server path is not valid for the requested operation.
-    #[error("invalid server path: {0}")]
-    InvalidPath(String),
+    #[error("HTTP request to {url} failed with status {status}: {body}")]
+    HttpStatus {
+        url: String,
+        status: u16,
+        body: String,
+    },
     /// A request URL could not be constructed.
     #[error("invalid request URL: {0}")]
     InvalidUrl(String),
