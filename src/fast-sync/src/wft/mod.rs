@@ -120,19 +120,8 @@ impl Wft {
         Self::get_json(&self.client, self.url(&["api", "get-android-version"])?).await
     }
 
-    /// Lists a directory relative to the selected storage root, such as
+    /// Lists a directory relative to the storage root, such as
     /// `"Pictures/Whatsapp"`.
-    ///
-    /// The selected root is prepended to `path`, then appended to
-    /// `/api/directory/` without a `root` prefix. The relative path is also
-    /// joined to the configured output root to determine each file's
-    /// [`FileStatus`].
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::InvalidPath`] if `path` is not a valid relative path.
-    /// Also returns an error if the request fails or the response contains an
-    /// API, HTTP, or JSON error.
     pub async fn directory(&self, path: impl AsRef<str>) -> Result<DirectoryIterator> {
         fn directory_path(root: &str, path: &str) -> Result<String> {
             if path.starts_with('/') {

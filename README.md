@@ -91,4 +91,4 @@ cargo run -- --ip 192.168.1.111 pull --directory Pictures
 
 The Nix development shell provides Cargo, rustfmt, Clippy, and Rust standard-library sources for rust-analyzer.
 
-The reusable Rust API is documented in [`src/wft/README.md`](src/wft/README.md).
+The reusable Rust API is documented in [`src/fast_sync/src/wft/README.md`](src/fast_sync/src/wft/README.md).
