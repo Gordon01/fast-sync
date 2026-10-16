@@ -1,3 +1,5 @@
+#![forbid(unsafe_code)]
+
 use std::net::SocketAddr;
 
 #[derive(Clone, Debug)]

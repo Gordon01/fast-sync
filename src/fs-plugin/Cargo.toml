@@ -12,3 +12,4 @@ fast-sync = { path = "../fast-sync" }
 tokio = { version = "1", features = ["rt-multi-thread"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["fmt"] }
+widestring = "1"
