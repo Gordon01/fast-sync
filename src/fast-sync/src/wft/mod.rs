@@ -1,3 +1,9 @@
+//! Async client for the WiFi File Transfer Android app HTTP API.
+//!
+//! [`Wft`] connects to a device and provides access to its storage, directory
+//! listings, and file downloads. Directory listings compare remote entries
+//! with local files; downloads return bytes without writing them to disk.
+
 use std::{
     net::SocketAddr,
     path::PathBuf,
@@ -27,12 +33,16 @@ pub struct Wft {
 }
 
 impl Wft {
-    /// Pings the WFT server, fetches storage details, and creates a client for it.
+    /// Connects to a WFT server and fetches its storage details.
+    ///
+    /// The default storage is the root with the greatest reported capacity.
+    /// The default local output root is `"out"`.
     ///
     /// # Errors
     ///
-    /// Returns an error if the server cannot be reached, responds with a
-    /// non-success status, does not return `pong`, or returns no storage details.
+    /// Returns an error if the server cannot be reached, returns a non-success
+    /// status, does not reply with `pong`, returns invalid storage data, or
+    /// reports no storage roots.
     pub async fn new(address: SocketAddr) -> Result<Self> {
         debug!(%address, "Pinging WFT server");
         let client = reqwest::Client::builder().build()?;
@@ -62,17 +72,34 @@ impl Wft {
         })
     }
 
-    /// Sets the local output root.
+    /// Sets the local root used to construct paths returned by [`Self::directory`].
+    ///
+    /// Creates the directory and any missing parent directories. This does not
+    /// change where [`Self::download_file`] writes files; that method returns
+    /// the downloaded bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the directory cannot be created.
     pub fn set_output_path(&mut self, path: impl Into<PathBuf>) -> std::io::Result<()> {
         self.output_path = path.into();
         std::fs::create_dir_all(&self.output_path)
     }
 
-    /// Returns storage details fetched when this client was constructed.
+    /// Returns the storage roots fetched when this client was constructed.
+    ///
+    /// Use [`Storages::selected_root`] to inspect the selected root and
+    /// [`Self::select_storage`] to choose another one.
     pub fn storages(&self) -> &Storages {
         &self.storages
     }
 
+    /// Selects a storage root by its exact path.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::StorageNotFound`] if the path was not reported by the
+    /// server.
     pub fn select_storage(&mut self, root_path: impl AsRef<str>) -> Result<()> {
         let root_path = root_path.as_ref();
         let selected = self
@@ -119,9 +146,17 @@ impl Wft {
         Self::get_json(&self.client, self.url(&["api", "get-android-version"])?).await
     }
 
-    /// Lists a directory relative to the storage root, such as
-    /// `"Pictures/Whatsapp"`, and compares its files with the corresponding
-    /// local output paths.
+    /// Lists a directory relative to the selected storage root.
+    ///
+    /// For each file, the returned [`DirectoryIterator`] includes the
+    /// corresponding path under the configured output root and its local
+    /// [`FileStatus`]. Listing does not create directories, download files, or
+    /// modify local files. An empty path lists the selected storage root.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the request fails, the server reports an API or HTTP
+    /// error, or the response is not valid directory data.
     pub async fn directory(&self, path: impl AsRef<str>) -> Result<DirectoryIterator> {
         let relative_path = path.as_ref();
         let root = &self.storages.selected_root().root_path;
@@ -147,14 +182,16 @@ impl Wft {
         Ok(directory.iter(local_directory))
     }
 
-    /// Downloads a file from the server path.
+    /// Downloads a file using its server path, such as [`Entry::path`].
     ///
     /// Returns the file bytes and elapsed request time in a [`DownloadedFile`].
+    /// This method does not write the bytes to the local output root.
     ///
     /// # Errors
     ///
     /// Returns an error if the request fails or the response contains an API
-    /// or HTTP error.
+    /// or HTTP error, or if the response cannot be used to construct the
+    /// request URL.
     pub async fn download_file(&self, path: impl AsRef<str>) -> Result<DownloadedFile> {
         let start = Instant::now();
         let path = path.as_ref();
@@ -265,7 +302,7 @@ struct ApiErrorResponse {
     error: String,
 }
 
-/// Result type used by the WFT client.
+/// Result type returned by the WFT client.
 pub type Result<T> = core::result::Result<T, Error>;
 
 /// Errors returned by the WFT client.

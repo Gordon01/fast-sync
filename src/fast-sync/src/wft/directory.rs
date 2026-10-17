@@ -6,6 +6,9 @@ use std::{
 use serde::Deserialize;
 
 /// Directory listing returned by the WFT API.
+///
+/// Use [`iter`](Self::iter) to compare the listed files with local files and
+/// consume the listing as [`DirectoryEntry`] values.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub struct Directory {
     /// Directories in the listing.
@@ -20,6 +23,7 @@ impl Directory {
     /// Consumes this listing and iterates its entries using `local_directory`
     /// to determine the status of each local file.
     ///
+    /// Local file statuses are determined when this method is called.
     /// Directories are yielded before files.
     pub fn iter(self, local_directory: impl Into<PathBuf>) -> DirectoryIterator {
         let local_directory = local_directory.into();
@@ -48,7 +52,10 @@ impl Directory {
     }
 }
 
-/// Iterator over the entries in a directory listing.
+/// Iterator over a [`Directory`] listing with local paths and file statuses.
+///
+/// Directories are yielded before files. Its byte totals are calculated when
+/// the iterator is created and do not change as it is consumed.
 pub struct DirectoryIterator {
     directories: Vec<Entry>,
     files: Vec<(Entry, FileStatus)>,
@@ -96,7 +103,7 @@ impl ExactSizeIterator for DirectoryIterator {}
 pub enum DirectoryEntry {
     /// A child directory.
     Directory(Entry),
-    /// A file contained in the listed directory.
+    /// A file, its corresponding local path, and its status when listed.
     File(Entry, PathBuf, FileStatus),
 }
 
@@ -109,7 +116,8 @@ pub struct Entry {
     pub size: u64,
     /// Absolute server path of the entry.
     pub path: String,
-    /// Modification timestamp reported by the server.
+    /// Modification time in milliseconds since the Unix epoch, as reported by
+    /// the server.
     pub modified: u64,
     /// File extension, or an empty string when none is reported.
     pub extension: String,
@@ -118,8 +126,9 @@ pub struct Entry {
 impl Entry {
     /// Compares this remote entry with a local file.
     ///
-    /// `DifferentTimestamp` is returned when the local file exists but its size
-    /// or modification time differs from this entry.
+    /// Compares a local file's size and modification time with this entry.
+    ///
+    /// Modification times are compared at millisecond precision.
     pub fn compare_local_file(&self, local_path: impl AsRef<Path>) -> FileStatus {
         let metadata = match std::fs::metadata(local_path) {
             Ok(metadata) => metadata,

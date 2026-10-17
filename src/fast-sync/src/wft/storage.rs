@@ -5,7 +5,7 @@ use serde::Deserialize;
 
 use super::{Error, Result};
 
-/// One storage location returned by `/api/get-storage-details`.
+/// One content entry returned by `/api/get-storage-details`.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]
 pub struct ContentGroup {
     /// Path of the storage entry.
@@ -31,7 +31,7 @@ impl fmt::Display for ContentGroup {
     }
 }
 
-/// A storage root reported by WFT.
+/// A storage root reported by WFT, including its total and available capacity.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StorageRoot {
     /// Absolute path of the storage root.
@@ -43,7 +43,9 @@ pub struct StorageRoot {
     contents: Vec<ContentGroup>,
 }
 
-/// Storage roots reported by WFT, with one root selected and entry sizes cached.
+/// Storage roots reported by WFT and the currently selected root.
+///
+/// The initial selection is the root with the greatest reported capacity.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Storages {
     pub roots: Vec<StorageRoot>,
@@ -79,12 +81,12 @@ impl Storages {
         Ok(Self { roots, selected })
     }
 
-    /// Returns all reported storage roots.
+    /// Returns all distinct storage roots reported by WFT.
     pub fn roots(&self) -> &[StorageRoot] {
         &self.roots
     }
 
-    /// Returns the selected storage root.
+    /// Returns the currently selected storage root.
     pub fn selected_root(&self) -> &StorageRoot {
         &self.roots[self.selected]
     }
