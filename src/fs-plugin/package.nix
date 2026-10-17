@@ -6,7 +6,7 @@
       packages = {
         fs-plugin = pkgs.rustPlatform.buildRustPackage {
           pname = "totaldroid-wfx";
-          version = (fromTOML (builtins.readFile ./Cargo.toml)).package.version;
+          version = (fromTOML (builtins.readFile ../../Cargo.toml)).workspace.package.version;
           src = ../..;
           cargoLock.lockFile = ../../Cargo.lock;
           cargoBuildFlags = [

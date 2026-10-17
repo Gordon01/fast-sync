@@ -1,7 +1,8 @@
 [package]
 name = "wft"
-version = "0.0.3"
-edition = "2024"
+version = "0.0.4"
+edition.workspace = true
+license.workspace = true
 description = "A client for the WiFi File Transfer HTTP protocol"
 homepage = "https://github.com/Gordon01/fast-sync"
 documentation = "https://docs.rs/wft"
@@ -10,16 +11,12 @@ keywords = ["android", "file-transfer", "wifi"]
 categories = ["network-programming"]
 
 [dependencies]
-readable = "0.16"
-reqwest = { version = "0.13", default-features = false, features = [
-  "charset",
-  "http2",
-  "rustls",
-] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-thiserror = "2"
-tracing = "0.1"
+readable.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }

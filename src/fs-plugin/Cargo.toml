@@ -1,15 +1,16 @@
 [package]
 name = "fs_plugin"
-version = "0.0.3"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 description = "A read-only Double Commander WFX filesystem plugin"
 
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
-wft = { path = "../wft" }
-tokio = { version = "1", features = ["rt-multi-thread"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["fmt"] }
-widestring = "1"
+wft.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread"] }
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["fmt"] }
+widestring.workspace = true
