@@ -5,7 +5,6 @@ use crate::{
     remote_path::{DevicePath, RemotePath},
     root,
 };
-use fast_sync::wft::{DirectoryEntry, Error as WftError, Wft};
 use std::{
     collections::HashMap,
     fmt,
@@ -17,6 +16,7 @@ use std::{
 };
 use tokio::runtime::Runtime;
 use tracing::info;
+use wft::{Error as WftError, Wft};
 
 pub use crate::root::Entry;
 
@@ -278,19 +278,23 @@ impl Plugin {
     /// Lists a device-relative directory without rewriting the host path.
     fn list_device(&self, address: SocketAddr, path: &str) -> Result<Vec<Entry>, Error> {
         let client = self.client(address)?;
-        let entries: Vec<_> = self
-            .runtime
-            .block_on(client.directory(path))?
-            .map(|entry| {
-                let (entry, is_directory) = match entry {
-                    DirectoryEntry::Directory(entry) => (entry, true),
-                    DirectoryEntry::File(entry, _, _) => (entry, false),
-                };
-                Entry {
-                    name: entry.name,
-                    is_directory,
-                    size: entry.size,
-                }
+        let directory = self.runtime.block_on(client.directory(path))?;
+        let entries: Vec<_> = directory
+            .directories
+            .into_iter()
+            .rev()
+            .map(|entry| (entry, true))
+            .chain(
+                directory
+                    .files
+                    .into_iter()
+                    .rev()
+                    .map(|entry| (entry, false)),
+            )
+            .map(|(entry, is_directory)| Entry {
+                name: entry.name,
+                is_directory,
+                size: entry.size,
             })
             .collect();
         info!(%address, count = entries.len(), "listed WFT directory");

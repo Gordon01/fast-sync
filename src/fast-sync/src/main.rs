@@ -3,9 +3,9 @@ mod sync;
 use std::net::{IpAddr, SocketAddr};
 
 use clap::{Parser, Subcommand};
-use fast_sync::wft::Wft;
 use tracing::debug;
 use tracing_subscriber::EnvFilter;
+use wft::Wft;
 
 /// Syncs files from a Wi‑Fi File Transfer server to the local filesystem.
 #[derive(Debug, Parser)]
@@ -45,8 +45,7 @@ async fn main() -> anyhow::Result<()> {
             if let Some(storage) = args.storage {
                 wft.select_storage(storage)?;
             }
-            wft.set_output_path(args.output.clone())?;
-            sync::pull(&wft, args.directory).await?;
+            sync::pull(&wft, args.directory, args.output).await?;
             Ok(())
         }
         Command::StorageInfo => {

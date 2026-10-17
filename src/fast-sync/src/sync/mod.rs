@@ -1,3 +1,4 @@
+mod local;
 mod pull;
 
 pub use pull::PullArgs;

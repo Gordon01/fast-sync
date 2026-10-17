@@ -3,7 +3,7 @@ use std::fmt;
 use readable::byte::Byte;
 use serde::Deserialize;
 
-use super::{Error, Result};
+use crate::{Error, Result};
 
 /// One content entry returned by `/api/get-storage-details`.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq)]

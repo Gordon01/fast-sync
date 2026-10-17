@@ -20,7 +20,6 @@
 
           installPhase = ''
             runHook preInstall
-            mkdir -p "$out/lib"
             install -m 755 \
               "target/${pkgs.stdenv.hostPlatform.rust.rustcTarget}/release/libfs_plugin.dylib" \
               "$out/TotalDroid.WFX"

@@ -18,7 +18,7 @@
         ];
 
         meta = {
-          description = "A client for the WiFi File Transfer HTTP protocol";
+          description = "A CLI for syncing files from WiFi File Transfer";
           mainProgram = "fast-sync";
           platforms = pkgs.lib.platforms.unix;
         };

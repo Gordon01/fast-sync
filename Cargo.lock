@@ -404,14 +404,10 @@ dependencies = [
  "anyhow",
  "clap",
  "indicatif",
- "readable",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "wft",
 ]
 
 [[package]]
@@ -445,10 +441,10 @@ checksum = "42703706b716c37f96a77aea830392ad231f44c9e9a67872fa5548707e11b11c"
 name = "fs_plugin"
 version = "0.0.3"
 dependencies = [
- "fast-sync",
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "wft",
  "widestring",
 ]
 
@@ -1952,6 +1948,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b96554aa2acc8ccdb7e1c9a58a7a68dd5d13bccc69cd124cb09406db612a1c9b"
 dependencies = [
  "rustls-pki-types",
+]
+
+[[package]]
+name = "wft"
+version = "0.0.3"
+dependencies = [
+ "readable",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]

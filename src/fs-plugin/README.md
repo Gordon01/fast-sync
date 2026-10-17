@@ -1,7 +1,7 @@
 # TotalDroid WFX demo
 
 This is a minimal, read-only Double Commander WFX plugin backed by the
-[WiFi File Transfer (WFT) API](../fast-sync/src/wft/README.md). It connects to
+[WiFi File Transfer (WFT) API](../wft/README.md). It connects to
 devices by IP address, lists their selected storage roots, and downloads files.
 
 ## Demo configuration

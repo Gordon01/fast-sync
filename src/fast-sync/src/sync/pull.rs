@@ -7,8 +7,10 @@ use std::{
 
 use anyhow::Context;
 use clap::Args;
-use fast_sync::wft::{DirectoryEntry, FileStatus, Wft};
 use indicatif::{ProgressBar, ProgressStyle};
+use wft::Wft;
+
+use super::local::{FileStatus, LocalFiles};
 
 #[derive(Debug, Args)]
 pub struct PullArgs {
@@ -26,9 +28,13 @@ pub struct PullArgs {
 }
 
 /// Downloads files that are missing or differ in size or modification time.
-pub async fn pull(wft: &Wft, directory: String) -> anyhow::Result<()> {
-    let entries = wft.directory(&directory).await?;
-    let total_bytes = entries.total_bytes() - entries.up_to_date_bytes();
+pub async fn pull(wft: &Wft, directory: String, output: PathBuf) -> anyhow::Result<()> {
+    let local_directory = output.join(&directory);
+    std::fs::create_dir_all(&local_directory)
+        .with_context(|| format!("Failed to create {:?}", local_directory))?;
+    let directory = wft.directory(&directory).await?;
+    let entries = LocalFiles::new(directory.files, &local_directory);
+    let total_bytes = entries.total_bytes - entries.up_to_date_bytes;
     let progress = ProgressBar::new(total_bytes);
     progress.set_style(
         ProgressStyle::with_template(
@@ -39,10 +45,7 @@ pub async fn pull(wft: &Wft, directory: String) -> anyhow::Result<()> {
     );
     let mut downloaded_any = false;
 
-    for entry in entries {
-        let DirectoryEntry::File(file, out_file, status) = entry else {
-            continue;
-        };
+    for (file, out_file, status) in entries.files.into_iter().rev() {
         match status {
             FileStatus::UpToDate => continue,
             FileStatus::Missing | FileStatus::DifferentTimestamp => {}

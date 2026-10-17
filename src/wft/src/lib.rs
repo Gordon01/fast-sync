@@ -1,18 +1,13 @@
-//! Async client for the WiFi File Transfer Android app HTTP API.
-//!
-//! [`Wft`] connects to a device and provides access to its storage, directory
-//! listings, and file downloads. Directory listings compare remote entries
-//! with local files; downloads return bytes without writing them to disk.
+#![doc = include_str!("../README.md")]
 
 use std::{
     net::SocketAddr,
-    path::PathBuf,
     time::{Duration, Instant},
 };
 
 mod directory;
 mod storage;
-pub use directory::{Directory, DirectoryEntry, DirectoryIterator, Entry, FileStatus};
+pub use directory::{Directory, Entry};
 pub use storage::{ContentGroup, StorageRoot, Storages};
 
 use readable::byte::Byte;
@@ -21,28 +16,15 @@ use serde::{Deserialize, de::DeserializeOwned};
 use tracing::{debug, info, trace};
 
 /// Client for the WiFi File Transfer Android app HTTP API.
-///
-/// Construct a client with [`Wft::new`], then use it to query device information
-/// and transfer files.
 #[derive(Clone, Debug)]
 pub struct Wft {
     address: SocketAddr,
     client: reqwest::Client,
     storages: Storages,
-    output_path: PathBuf,
 }
 
 impl Wft {
     /// Connects to a WFT server and fetches its storage details.
-    ///
-    /// The default storage is the root with the greatest reported capacity.
-    /// The default local output root is `"out"`.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the server cannot be reached, returns a non-success
-    /// status, does not reply with `pong`, returns invalid storage data, or
-    /// reports no storage roots.
     pub async fn new(address: SocketAddr) -> Result<Self> {
         debug!(%address, "Pinging WFT server");
         let client = reqwest::Client::builder().build()?;
@@ -68,22 +50,7 @@ impl Wft {
             address,
             client,
             storages: Storages::new(storages)?,
-            output_path: PathBuf::from("out"),
         })
-    }
-
-    /// Sets the local root used to construct paths returned by [`Self::directory`].
-    ///
-    /// Creates the directory and any missing parent directories. This does not
-    /// change where [`Self::download_file`] writes files; that method returns
-    /// the downloaded bytes.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the directory cannot be created.
-    pub fn set_output_path(&mut self, path: impl Into<PathBuf>) -> std::io::Result<()> {
-        self.output_path = path.into();
-        std::fs::create_dir_all(&self.output_path)
     }
 
     /// Returns the storage roots fetched when this client was constructed.
@@ -95,11 +62,6 @@ impl Wft {
     }
 
     /// Selects a storage root by its exact path.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`Error::StorageNotFound`] if the path was not reported by the
-    /// server.
     pub fn select_storage(&mut self, root_path: impl AsRef<str>) -> Result<()> {
         let root_path = root_path.as_ref();
         let selected = self
@@ -113,21 +75,11 @@ impl Wft {
     }
 
     /// Fetches the platform identifier reported by the server.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the request fails or the response is an API,
-    /// HTTP, or JSON error.
     pub async fn get_platform_info(&self) -> Result<PlatformInfo> {
         Self::get_json(&self.client, self.url(&["api", "get-platform-info"])?).await
     }
 
     /// Fetches whether the app has Android's manage-external-storage permission.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the request fails or the response is an API,
-    /// HTTP, or JSON error.
     pub async fn check_manage_storage_permission(&self) -> Result<ManageStoragePermission> {
         Self::get_json(
             &self.client,
@@ -137,27 +89,12 @@ impl Wft {
     }
 
     /// Fetches Android SDK and release information.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the request fails or the response is an API,
-    /// HTTP, or JSON error.
     pub async fn get_android_version(&self) -> Result<AndroidVersion> {
         Self::get_json(&self.client, self.url(&["api", "get-android-version"])?).await
     }
 
     /// Lists a directory relative to the selected storage root.
-    ///
-    /// For each file, the returned [`DirectoryIterator`] includes the
-    /// corresponding path under the configured output root and its local
-    /// [`FileStatus`]. Listing does not create directories, download files, or
-    /// modify local files. An empty path lists the selected storage root.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the request fails, the server reports an API or HTTP
-    /// error, or the response is not valid directory data.
-    pub async fn directory(&self, path: impl AsRef<str>) -> Result<DirectoryIterator> {
+    pub async fn directory(&self, path: impl AsRef<str>) -> Result<Directory> {
         let relative_path = path.as_ref();
         let root = &self.storages.selected_root().root_path;
         let mut segments = vec!["api", "directory"];
@@ -178,20 +115,12 @@ impl Wft {
             directory.directories.len(),
             directory.files.len(),
         );
-        let local_directory = self.output_path.join(relative_path);
-        Ok(directory.iter(local_directory))
+        Ok(directory)
     }
 
     /// Downloads a file using its server path, such as [`Entry::path`].
     ///
     /// Returns the file bytes and elapsed request time in a [`DownloadedFile`].
-    /// This method does not write the bytes to the local output root.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the request fails or the response contains an API
-    /// or HTTP error, or if the response cannot be used to construct the
-    /// request URL.
     pub async fn download_file(&self, path: impl AsRef<str>) -> Result<DownloadedFile> {
         let start = Instant::now();
         let path = path.as_ref();
@@ -337,11 +266,4 @@ pub enum Error {
     /// The requested storage root was not reported by WFT.
     #[error("storage root {0:?} was not reported by WFT")]
     StorageNotFound(String),
-    /// The local output directory could not be created.
-    #[error("failed to create output directory {path:?}: {source}")]
-    OutputDirectory {
-        path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
 }
